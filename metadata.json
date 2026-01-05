@@ -1,0 +1,5 @@
+{
+  "name": "C1ILS",
+  "description": "A modern, web-based Integrated Library System (ILS) for managing library operations including members, books, checkouts, check-ins, and reservations. Features a dashboard with statistics and comprehensive management tools for librarians.",
+  "requestFramePermissions": []
+}
