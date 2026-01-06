@@ -1,7 +1,15 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Book, Transaction, Reservation } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// 1. FIX: Get Key correctly for Vite
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
+
+// 2. Safety Check: Prevent App Crash if key is missing
+if (!apiKey) {
+  console.error("⚠️ Gemini API Key is missing. AI features will not work.");
+}
+
+const ai = new GoogleGenAI({ apiKey: apiKey });
 
 export interface Recommendation {
     title: string;
@@ -13,6 +21,9 @@ export const getBookRecommendations = async (
     memberHistory: (Transaction | Reservation)[],
     fullCatalog: Book[]
 ): Promise<Recommendation[]> => {
+    
+    if (!apiKey) return []; // Stop if no key
+
     // Collect titles of books user has already interacted with
     const historyTitles = new Set(memberHistory.map(h => {
         if ('bookTitle' in h) return h.bookTitle;
@@ -20,7 +31,7 @@ export const getBookRecommendations = async (
         return book?.title || '';
     }).filter(t => t !== ''));
 
-    // Deduplicate available catalog by title to prevent AI from seeing multiple copies of the same book
+    // Deduplicate available catalog
     const catalogForAi = fullCatalog
         .filter(b => !historyTitles.has(b.title))
         .map(b => ({ 
@@ -50,11 +61,11 @@ export const getBookRecommendations = async (
     Return the recommendations as a JSON object.`;
 
     try {
+        // 3. FIX: Use a standard stable model (gemini-1.5-flash)
         const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
+            model: "gemini-1.5-flash", 
             contents: prompt,
             config: {
-                thinkingConfig: { thinkingBudget: 2000 },
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -82,7 +93,7 @@ export const getBookRecommendations = async (
         const text = response.text || '{"recommendations": []}';
         const result = JSON.parse(text);
         
-        // Final safety check: Only keep suggestions that ACTUALLY exist in our catalog
+        // Final safety check
         const seenTitles = new Set<string>();
         const uniqueRecs: Recommendation[] = [];
         
