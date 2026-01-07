@@ -1,13 +1,13 @@
 {
   "name": "MAHSS Library",
-  "short_name": "MAHSS Lib",
+  "short_name": "MAHSS Library",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#0047AB",
   "icons": [
     {
-      "src": "icon.png",
+      "src": "./icon.png",
       "sizes": "512x512",
       "type": "image/png"
     }
