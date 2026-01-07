@@ -1,32 +1,104 @@
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0047AB">
+
     <title>Integrated Library System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@18.2.0",
-    "react/": "https://esm.sh/react@18.2.0/",
-    "react-dom": "https://esm.sh/react-dom@18.2.0",
-    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-    "recharts": "https://esm.sh/recharts@2.12.3?external=react,react-dom",
-    "date-fns": "https://esm.sh/date-fns@3.6.0",
-    "jspdf": "https://esm.sh/jspdf@2.5.1",
-    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.34.0"
-  }
-}
-</script>
-  <link rel="stylesheet" href="/index.css">
-</head>
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react/": "https://esm.sh/react@18.2.0/",
+        "react-dom": "https://esm.sh/react-dom@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "recharts": "https://esm.sh/recharts@2.12.3?external=react,react-dom",
+        "date-fns": "https://esm.sh/date-fns@3.6.0",
+        "jspdf": "https://esm.sh/jspdf@2.5.1",
+        "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
+        "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+        "@google/genai": "https://esm.sh/@google/genai@^1.34.0"
+      }
+    }
+    </script>
+    <link rel="stylesheet" href="/index.css">
+  </head>
   <body class="bg-slate-50 dark:bg-slate-950">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
+
+    <script>
+      // 1. Service Worker Register ചെയ്യുന്നു (PWA യ്ക്ക് വേണ്ടി)
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then((registration) => {
+              console.log('PWA ServiceWorker registered: ', registration);
+            })
+            .catch((registrationError) => {
+              console.log('PWA ServiceWorker registration failed: ', registrationError);
+            });
+        });
+      }
+
+      // 2. നെറ്റ് പോയാൽ 2 സെക്കൻഡ് "No Internet" കാണിക്കാനുള്ള കോഡ്
+      window.addEventListener('offline', () => {
+          const alertBox = document.createElement('div');
+          alertBox.innerText = "⚠️ No Internet Connection";
+          
+          // CSS Styles for the Alert Box
+          Object.assign(alertBox.style, {
+            position: 'fixed',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: '#ff3333', // Red color
+            color: 'white',
+            padding: '10px 20px',
+            borderRadius: '5px',
+            fontWeight: 'bold',
+            zIndex: '9999',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.2)'
+          });
+          
+          document.body.appendChild(alertBox);
+
+          // 2 സെക്കൻഡിന് ശേഷം തനിയെ മാഞ്ഞുപോകും
+          setTimeout(() => {
+              alertBox.remove();
+          }, 2000);
+      });
+
+      // 3. (Optional) നെറ്റ് തിരിച്ചു വന്നാൽ പച്ച കളറിൽ കാണിക്കാൻ
+      window.addEventListener('online', () => {
+          const alertBox = document.createElement('div');
+          alertBox.innerText = "✅ Back Online";
+          
+          Object.assign(alertBox.style, {
+            position: 'fixed',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: '#28a745', // Green color
+            color: 'white',
+            padding: '10px 20px',
+            borderRadius: '5px',
+            fontWeight: 'bold',
+            zIndex: '9999',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.2)'
+          });
+          
+          document.body.appendChild(alertBox);
+
+          setTimeout(() => {
+              alertBox.remove();
+          }, 2000);
+      });
+    </script>
   </body>
 </html>
