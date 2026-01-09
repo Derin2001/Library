@@ -16,7 +16,7 @@ import { addDays, isBefore, parseISO, differenceInDays, formatISO, startOfDay, s
 import Toast from './components/common/Toast';
 import { supabase } from './lib/supabase';
 
-// ✅ 1. IMPORT OFFLINE TOOLS
+// ✅ IMPORT OFFLINE TOOLS
 import OfflineStatus from './components/OfflineStatus';
 import { handleLibraryAction } from './lib/OfflineManager';
 
@@ -37,11 +37,11 @@ const App: React.FC = () => {
     const closeNotification = () => setNotification(null);
 
     // =========================================================================
-    // 2. DATA LOADING FUNCTION (Updated for Offline Caching)
+    // 2. DATA LOADING FUNCTION
     // =========================================================================
     const fetchAllData = useCallback(async () => {
-        // A. ONLINE MODE: Fetch from Supabase -> Save to LocalStorage
         if (navigator.onLine) {
+            // ONLINE: Fetch from Supabase & Cache
             const [
                 booksRes,
                 membersRes,
@@ -93,9 +93,8 @@ const App: React.FC = () => {
                 }));
                 setArchiveHistory(mappedArchive);
             }
-        } 
-        // B. OFFLINE MODE: Fetch from LocalStorage
-        else {
+        } else {
+            // OFFLINE: Load from LocalStorage
             const cBooks = localStorage.getItem('cached_books');
             const cMembers = localStorage.getItem('cached_members');
             const cTrans = localStorage.getItem('cached_transactions');
@@ -132,7 +131,6 @@ const App: React.FC = () => {
     const logActivity = useCallback(async (action: string, details: string) => {
         const newEntry = { id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, timestamp: new Date().toISOString(), action, details };
         setActivityLog(prev => [newEntry, ...prev]);
-        // Logs are always strictly online or fire-and-forget, keeping simple
         if(navigator.onLine) {
              await supabase.from('activity_log').insert([newEntry]);
         }
@@ -187,7 +185,7 @@ const App: React.FC = () => {
     }, [books, transactions, reservations]);
 
     // =========================================================================
-    // 5. HANDLERS
+    // 5. HANDLERS (ALL UPDATED WITH AWAIT & RETURN)
     // =========================================================================
     const generateMemberId = () => {
         const numericIds = members.map(m => parseInt(m.id)).filter(n => !isNaN(n)).sort((a, b) => a - b);
@@ -204,7 +202,6 @@ const App: React.FC = () => {
 
     const verifyLogin = async (role: 'LIBRARIAN' | 'MEMBER', id?: string, password?: string): Promise<boolean> => {
         if (!navigator.onLine) {
-            // Simple offline login check (Optional: can be improved)
             if (role === 'MEMBER') {
                  const member = members.find(m => m.id === id);
                  if (member && password === `${member.id}@123`) {
@@ -245,28 +242,46 @@ const App: React.FC = () => {
 
     const handleUpdateAdminPassword = async (newPass: string) => {
         const updateData = { id: 1, password: newPass };
-        handleLibraryAction('admin_auth', 'UPDATE', updateData, () => {
+        // ✅ Password Change - Await Added
+        const success = await handleLibraryAction('admin_auth', 'UPDATE', updateData, () => {
             showNotification('Password updated successfully!', 'success');
         });
-        return {success: true, message: 'Updated'};
+        if (success) return {success: true, message: 'Updated'};
+        return {success: false, message: 'Failed'};
     };
 
     const handleVerifyAdminForReset = async (passwordInput: string) => {
-        if (!navigator.onLine) return false; // Reset verification only online
+        if (!navigator.onLine) return false;
         try {
             const { data } = await supabase.from('admin_auth').select('id').eq('password', passwordInput).single();
             return !!data;
         } catch(e) { return false; }
     };
 
-    // --- BOOKS (UPDATED WITH OFFLINE MANAGER) ---
+    // --- BOOKS HANDLERS ---
+    const handleAddBook = async (b: Book) => {
+        const nb = {...b, id: generateBookId()};
+        
+        // ✅ Add Book - Await Added
+        const success = await handleLibraryAction('books', 'INSERT', nb, () => {
+             setBooks(p => [...p, nb]);
+             logActivity('Add Book', `Added: ${nb.title} (ID: ${nb.id})`);
+             showNotification(`Book "${nb.title}" added successfully.`, 'success');
+        });
+
+        if (success) return {success: true, message: 'Added', newBook: nb};
+        return {success: false, message: 'Failed'};
+    };
+
     const handleUpdateBook = async (id: string, d: Partial<Omit<Book, 'id'>>) => {
         const updateData = { id, ...d };
-        handleLibraryAction('books', 'UPDATE', updateData, () => {
+        // ✅ Update Book - Await Added
+        const success = await handleLibraryAction('books', 'UPDATE', updateData, () => {
             setBooks(p => p.map(b => b.id === id ? {...b, ...d} : b));
             showNotification(`Book updated successfully.`, 'success');
         });
-        return {success: true, message: 'Updated'};
+        if(success) return {success: true, message: 'Updated'};
+        return {success: false, message: 'Failed'};
     };
 
     const handleDeleteBook = async (id: string) => {
@@ -275,47 +290,61 @@ const App: React.FC = () => {
         const checkInCount = bookTransactions.filter(t => t.type === TransactionType.CheckIn).length;
 
         if (checkOutCount > checkInCount) {
-            showNotification('Cannot delete: Book is issued to a member. Receive it first.', 'error');
+            showNotification('Cannot delete: Book is issued to a member.', 'error');
             return;
         }
 
         const book = books.find(b => b.id === id);
         
-        handleLibraryAction('books', 'DELETE', { id }, async () => {
-            if (book) {
-                // Keep archive history as online-only or separate to keep offline logic simple
-                if(navigator.onLine) {
-                    const dbEntry = { id: `arch-${Date.now()}`, itemType: 'BOOK', info: `${book.title} by ${book.author}`, deletedDate: new Date().toISOString() };
-                    await supabase.from('archive_history').insert([dbEntry]);
-                    const uiEntry = { id: dbEntry.id, type: 'BOOK', itemName: book.title, itemId: book.id, deletedAt: dbEntry.deletedDate, history: null };
-                    setArchiveHistory(p => [uiEntry, ...p]);
-                }
+        // ✅ Delete Book - Await Added
+        await handleLibraryAction('books', 'DELETE', { id }, async () => {
+            if (book && navigator.onLine) {
+                const dbEntry = { id: `arch-${Date.now()}`, itemType: 'BOOK', info: `${book.title} by ${book.author}`, deletedDate: new Date().toISOString() };
+                await supabase.from('archive_history').insert([dbEntry]);
+                const uiEntry = { id: dbEntry.id, type: 'BOOK', itemName: book.title, itemId: book.id, deletedAt: dbEntry.deletedDate, history: null };
+                setArchiveHistory(p => [uiEntry, ...p]);
             }
             setBooks(p => p.filter(b => b.id !== id));
             showNotification('Book deleted successfully.', 'success');
         });
     };
 
-    // --- MEMBERS (UPDATED WITH OFFLINE MANAGER) ---
+    // --- MEMBERS HANDLERS ---
+    const handleAddMember = async (m: Member) => {
+        const finalId = m.id ? m.id.padStart(4, '0') : generateMemberId();
+        if (members.some(member => member.id === finalId)) return { success: false, message: `Member ID ${finalId} exists.` };
+        const nm = {...m, id: finalId, joinDate: new Date().toISOString()};
+        
+        // ✅ Add Member - Await Added
+        const success = await handleLibraryAction('members', 'INSERT', nm, () => {
+             setMembers(p => [...p, nm]);
+             logActivity('Add Member', `Added: ${nm.name} (ID: ${nm.id})`);
+             showNotification(`Member "${nm.name}" added successfully.`, 'success');
+        });
+
+        if (success) return {success: true, message: 'Added', newMember: nm};
+        return {success: false, message: 'Failed'};
+    };
+
     const handleUpdateMember = async (oldId: string, d: any) => {
         const updateData = { id: oldId, ...d };
-        handleLibraryAction('members', 'UPDATE', updateData, () => {
+        // ✅ Update Member - Await Added
+        const success = await handleLibraryAction('members', 'UPDATE', updateData, () => {
             setMembers(p => p.map(m => m.id === oldId ? {...m, ...d} : m));
             showNotification('Member updated successfully', 'success');
         });
-        return {success: true, message: 'Updated'};
+        if(success) return {success: true, message: 'Updated'};
+        return {success: false, message: 'Failed'};
     };
 
     const handleDeleteMember = async (id: string) => {
         const memberTransactions = transactions.filter(t => t.memberId === id);
         const bookStatus: {[key: string]: number} = {};
-        
         memberTransactions.forEach(t => {
             if (!bookStatus[t.bookId]) bookStatus[t.bookId] = 0;
             if (t.type === TransactionType.CheckOut) bookStatus[t.bookId]++;
             else if (t.type === TransactionType.CheckIn) bookStatus[t.bookId]--;
         });
-
         const hasActiveLoans = Object.values(bookStatus).some(count => count > 0);
 
         if (hasActiveLoans) {
@@ -325,7 +354,8 @@ const App: React.FC = () => {
 
         const member = members.find(m => m.id === id);
 
-        handleLibraryAction('members', 'DELETE', { id }, async () => {
+        // ✅ Delete Member - Await Added
+        await handleLibraryAction('members', 'DELETE', { id }, async () => {
             if (member && navigator.onLine) {
                 const dbEntry = { id: `arch-${Date.now()}`, itemType: 'MEMBER', info: `${member.name} (ID: ${member.id})`, deletedDate: new Date().toISOString() };
                 await supabase.from('archive_history').insert([dbEntry]);
@@ -337,14 +367,16 @@ const App: React.FC = () => {
         });
     };
 
-    // --- SETTINGS (UPDATED) ---
+    // --- SETTINGS ---
     const handleUpdateSettings = async (newSettings: Settings) => {
         const updateData = { id: 1, ...newSettings };
-        handleLibraryAction('settings', 'UPDATE', updateData, () => {
+        // ✅ Settings Update - Await Added
+        const success = await handleLibraryAction('settings', 'UPDATE', updateData, () => {
              setSettings(newSettings);
              showNotification('Settings updated globally.', 'success');
         });
-        return {success: true, message: 'Updated'};
+        if(success) return {success: true, message: 'Updated'};
+        return {success: false, message: 'Failed'};
     };
 
     const handleResetSystem = async () => { 
@@ -361,7 +393,7 @@ const App: React.FC = () => {
         showNotification('System Reset Complete.', 'success');
     };
 
-    // --- RENEWAL (UPDATED WITH OFFLINE MANAGER) ---
+    // --- RENEWAL ---
     const handleRenewLoan = async (transactionId: string) => {
         const loan = transactions.find(t => t.id === transactionId);
         if (!loan) return { success: false, message: 'Record not found.' };
@@ -370,7 +402,6 @@ const App: React.FC = () => {
         let newDueDate = addDays(currentDueDateObj, settings.loanPeriodDays);
         let message = 'Loan renewed successfully.';
 
-        // Conflict check logic
         const book = books.find(b => b.id === loan.bookId);
         if (book) {
             const conflictingReservations = reservations.filter(r =>
@@ -387,36 +418,33 @@ const App: React.FC = () => {
                 const earliestRes = conflictingReservations[0];
                 const resPickupDate = parseISO(earliestRes.pickupDate);
                 const cappedDueDate = subDays(resPickupDate, 1);
-
                 if (isBefore(cappedDueDate, currentDueDateObj) || cappedDueDate.getTime() === currentDueDateObj.getTime()) {
-                    const resDateStr = format(resPickupDate, 'dd/MM/yyyy');
-                    showNotification(`Cannot renew: Reservation starts on ${resDateStr}.`, 'error');
+                    showNotification('Cannot renew due to reservation.', 'error');
                     return { success: false, message: 'Blocked by Reservation' };
                 }
                 newDueDate = cappedDueDate;
-                message = `Renewed only until ${format(newDueDate, 'dd/MM/yyyy')} due to an upcoming reservation.`;
+                message = `Renewed only until ${format(newDueDate, 'dd/MM/yyyy')} (Reservation).`;
             }
         }
 
         const newRenewalCount = (loan.renewalCount || 0) + 1;
-        
-        // Prepare Data for Update
         const updateData = { 
             id: transactionId, 
             dueDate: newDueDate.toISOString(), 
             renewalCount: newRenewalCount 
         };
 
-        handleLibraryAction('transactions', 'UPDATE', updateData, () => {
+        // ✅ Renew Loan - Await Added
+        const success = await handleLibraryAction('transactions', 'UPDATE', updateData, () => {
              setTransactions(prev => prev.map(t => t.id === transactionId ? { ...t, dueDate: newDueDate.toISOString(), renewalCount: newRenewalCount } : t));
-             logActivity('Renew Loan', `Renewed ${loan.bookTitle} until ${format(newDueDate, 'yyyy-MM-dd')}`);
+             logActivity('Renew Loan', `Renewed ${loan.bookTitle}`);
              showNotification(message, 'success');
         });
-
-        return { success: true, message: 'Renewed' };
+        if(success) return { success: true, message: 'Renewed' };
+        return { success: false, message: 'Failed' };
     };
 
-    // --- TRANSACTION ACTIONS (UPDATED) ---
+    // --- TRANSACTION ACTIONS ---
     const handleCheckout = async (bid: string, mid: string, dd: string) => {
         const book = books.find(b => b.id === bid);
         if (!book) return {success: false, message: 'Book not found'};
@@ -434,12 +462,15 @@ const App: React.FC = () => {
             renewalCount: 0 
         };
 
-        handleLibraryAction('transactions', 'INSERT', trans, () => {
+        // ✅ Checkout - Await Added
+        const success = await handleLibraryAction('transactions', 'INSERT', trans, () => {
             setTransactions(p => [...p, trans]);
             logActivity('Checkout', `Issued ${book.title} to ${mid}`);
             showNotification(`Checkout successful: "${book.title}" to ${memberName}`, 'success');
         });
-        return {success: true, message: 'Checkout successful'};
+
+        if (success) return {success: true, message: 'Checkout successful'};
+        return {success: false, message: 'Failed'};
     };
 
     const handleCheckin = async (bid: string, mid: string, title: string) => {
@@ -454,73 +485,72 @@ const App: React.FC = () => {
             date: new Date().toISOString() 
         };
 
-        handleLibraryAction('transactions', 'INSERT', trans, () => {
+        // ✅ Check-in - Await Added
+        await handleLibraryAction('transactions', 'INSERT', trans, () => {
             setTransactions(p => [...p, trans]);
             logActivity('Check-in', `Returned ${title} from ${mid}`);
             showNotification(`Returned successful: "${title}"`, 'success');
         });
     };
 
-    // --- RESERVATION ACTIONS (UPDATED) ---
+    // --- RESERVATION ACTIONS ---
     const handleReserveBook = async (r: Omit<Reservation, 'id' | 'reservationDate' | 'status'>) => {
         const nr = { ...r, id: `R${Date.now()}`, reservationDate: new Date().toISOString(), status: 'Active' as const };
+        const memberName = members.find(m => m.id === r.memberId)?.name || 'Member';
         
-        handleLibraryAction('reservations', 'INSERT', nr, () => {
+        // ✅ Reserve - Await Added
+        const success = await handleLibraryAction('reservations', 'INSERT', nr, () => {
              setReservations(p => [...p, nr]);
              logActivity('Reserve Book', `Reserved book ID ${r.bookId}`);
-             showNotification('Reservation saved successfully.', 'success');
+             showNotification(`Reservation placed successfully for ${memberName}.`, 'success');
         });
-        return {success: true, message: 'Reserved'};
+        if(success) return {success: true, message: 'Reserved'};
+        return {success: false, message: 'Failed'};
     };
 
     const handleCancelReservation = async (id: string) => {
         const updateData = { id, status: 'Cancelled' };
-        handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+        // ✅ Cancel Reservation - Await Added
+        const success = await handleLibraryAction('reservations', 'UPDATE', updateData, () => {
             setReservations(p => p.map(r => r.id === id ? {...r, status: 'Cancelled'} : r));
             showNotification('Reservation cancelled.', 'success');
         });
-        return {success: true, message: 'Cancelled'};
+        if(success) return {success: true, message: 'Cancelled'};
+        return {success: false, message: 'Failed'};
     };
 
     const handleIssueReservedBook = async (id: string) => {
         const updateData = { id, status: 'Fulfilled' };
-        handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+        // ✅ Issue Reserved - Await Added
+        const success = await handleLibraryAction('reservations', 'UPDATE', updateData, () => {
              setReservations(p => p.map(r => r.id === id ? {...r, status: 'Fulfilled'} : r));
              showNotification('Reserved book issued successfully.', 'success');
         });
-        return {success: true, message: 'Issued'};
+        if(success) return {success: true, message: 'Issued'};
+        return {success: false, message: 'Failed'};
     };
 
     const handleUpdateReservationDate = async (id: string, date: string) => {
         const updateData = { id, pickupDate: date };
-        handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+        // ✅ Update Res Date - Await Added
+        const success = await handleLibraryAction('reservations', 'UPDATE', updateData, () => {
             setReservations(prev => prev.map(r => r.id === id ? { ...r, pickupDate: date } : r));
             showNotification('Reservation date updated.', 'success');
         });
-        return { success: true, message: 'Date updated.' };
+        if(success) return { success: true, message: 'Date updated.' };
+        return { success: false, message: 'Failed' };
     };
 
     const handleCancelOverdueReservation = async (id: string) => {
         const updateData = { id, status: 'Cancelled (Overdue)' };
-        handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+        // ✅ Cancel Overdue - Await Added
+        await handleLibraryAction('reservations', 'UPDATE', updateData, () => {
             setReservations(prev => prev.map(r => r.id === id ? {...r, status: 'Cancelled (Overdue)'} : r)); 
             showNotification('Overdue reservation cancelled.', 'success'); 
         });
     };
 
-    // --- ADDING HANDLERS (UPDATED) ---
-    const handleAddBook = async (b: Book) => {
-        const nb = {...b, id: generateBookId()};
-        
-        handleLibraryAction('books', 'INSERT', nb, () => {
-             setBooks(p => [...p, nb]);
-             logActivity('Add Book', `Added: ${nb.title} (ID: ${nb.id})`);
-             showNotification(`Book "${nb.title}" added successfully.`, 'success');
-        });
-        return {success: true, message: 'Added', newBook: nb};
-    };
-
-    // NOTE: Bulk operations are kept Online-Only for safety
+    // --- BULK OPERATIONS (ONLINE ONLY) ---
     const handleBulkAddBooks = async (bs: Omit<Book, 'id'>[]) => {
         if(!navigator.onLine) { showNotification("Bulk add requires internet!", "error"); return { success: 0, failed: bs.length, errors: ['Offline'] }; }
         const numericIds = books.map(b => b.id.startsWith('A') ? parseInt(b.id.substring(1)) : NaN).filter(n => !isNaN(n));
@@ -539,20 +569,6 @@ const App: React.FC = () => {
         return {success: bs.length, failed: 0, errors: []};
     };
 
-    const handleAddMember = async (m: Member) => {
-        const finalId = m.id ? m.id.padStart(4, '0') : generateMemberId();
-        if (members.some(member => member.id === finalId)) return { success: false, message: `Member ID ${finalId} exists.` };
-        const nm = {...m, id: finalId, joinDate: new Date().toISOString()};
-        
-        handleLibraryAction('members', 'INSERT', nm, () => {
-             setMembers(p => [...p, nm]);
-             logActivity('Add Member', `Added: ${nm.name} (ID: ${nm.id})`);
-             showNotification(`Member "${nm.name}" added successfully.`, 'success');
-        });
-        return {success: true, message: 'Added', newMember: nm};
-    };
-
-    // Bulk operations kept online-only
     const handleBulkAddMembers = async (ms: Member[]) => {
         if(!navigator.onLine) { showNotification("Bulk add requires internet!", "error"); return { success: 0, failed: ms.length, errors: ['Offline'] }; }
         const numericIds = members.map(m => parseInt(m.id)).filter(n => !isNaN(n));
@@ -579,7 +595,7 @@ const App: React.FC = () => {
     };
 
     // =========================================================================
-    // 6. RENDER (Updated with OfflineStatus)
+    // 6. RENDER
     // =========================================================================
 
     if (!isLoggedIn) return <Login onLogin={verifyLogin} onLoginAttempt={(s, u) => logActivity(s ? 'Login' : 'Login Failed', `User: ${u}`)} />;
@@ -596,13 +612,13 @@ const App: React.FC = () => {
                         transactions={transactions} 
                         reservations={reservations} 
                         onCancelReservation={async (id) => { 
-                             // Using handleLibraryAction for member cancel too
                              const updateData = { id, status: 'Cancelled (Member)' };
-                             handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+                             const success = await handleLibraryAction('reservations', 'UPDATE', updateData, () => {
                                 setReservations(prev => prev.map(r => r.id === id ? {...r, status: 'Cancelled (Member)'} : r)); 
                                 showNotification('Reservation cancelled.', 'success');
                              });
-                             return {success: true, message: 'Cancelled'}; 
+                             if (success) return {success: true, message: 'Cancelled'}; 
+                             return {success: false, message: 'Failed'};
                         }} 
                         showNotification={showNotification} 
                         settings={settings} 
@@ -720,7 +736,7 @@ const App: React.FC = () => {
                 </main>
             </div>
             
-            {/* ✅ OFFLINE STATUS UI ADDED HERE */}
+            {/* ✅ OFFLINE STATUS UI */}
             <OfflineStatus />
             
             {notification && <Toast message={notification.message} type={notification.type} onClose={closeNotification} />}
