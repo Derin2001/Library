@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { Book, Transaction, TransactionType, Member } from '../types';
 import Card from './common/Card';
-import { SearchIcon } from './icons';
-import { format, parseISO } from 'date-fns';
+import { SearchIcon, ExclamationTriangleIcon } from './icons';
+import { format, parseISO, differenceInDays, isBefore, startOfDay } from 'date-fns';
 import Modal from './common/Modal';
 
 interface CheckedOutBookInfo {
@@ -12,6 +12,7 @@ interface CheckedOutBookInfo {
     memberId: string;
     memberName: string;
     checkoutDate: string;
+    dueDate: string; // ✅ Added Due Date
     renewalCount: number;
 }
 
@@ -19,7 +20,6 @@ interface CheckinBookProps {
     books: Book[];
     transactions: Transaction[];
     members: Member[];
-    // ✅ Updated to Promise for async handling
     onCheckin: (bookId: string, memberId: string, title: string) => Promise<any>;
     onRenewLoan?: (transactionId: string, daysToExtend?: number) => Promise<{ success: boolean; message: string }>;
     showNotification: (message: string, type: 'success' | 'error') => void;
@@ -33,7 +33,7 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
     const [renewCandidate, setRenewCandidate] = useState<CheckedOutBookInfo | null>(null);
     const [daysToExtend, setDaysToExtend] = useState(15);
 
-    // ✅ Loading State Added
+    // Loading State
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const checkedOutBooks = useMemo(() => {
@@ -71,6 +71,7 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
                     memberId: t.memberId,
                     memberName: member?.name || 'Unknown Member',
                     checkoutDate: t.date,
+                    dueDate: t.dueDate || '', // ✅ Mapping Due Date
                     renewalCount: t.renewalCount || 0
                 };
             })
@@ -92,15 +93,12 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
         setCheckinCandidate(book);
     };
 
-    // ✅ FIXED: Async Confirm Checkin
     const confirmCheckin = async () => {
         if (!checkinCandidate || isSubmitting) return;
         setIsSubmitting(true);
 
-        // ⏳ Wait for DB operation
         await onCheckin(checkinCandidate.bookId, checkinCandidate.memberId, checkinCandidate.title);
         
-        // Note: Notification is handled in App.tsx now
         setIsSubmitting(false);
         setCheckinCandidate(null);
     };
@@ -110,23 +108,32 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
         setDaysToExtend(15);
     };
 
-    // ✅ FIXED: Async Confirm Renew
     const confirmRenew = async () => {
         if (!onRenewLoan || !renewCandidate || isSubmitting) return;
         setIsSubmitting(true);
 
-        // ⏳ Wait for DB operation
         const result = await onRenewLoan(renewCandidate.transactionId, daysToExtend);
         
         setIsSubmitting(false);
         
-        // Notification logic matches App.tsx return structure
-        // If App.tsx handles notification, this might be redundant but safe
         if (!result.success) { 
              showNotification(result.message, 'error');
         } else {
              setRenewCandidate(null);
         }
+    };
+
+    // Helper to calculate overdue status
+    const getOverdueStatus = (dueDateStr: string) => {
+        if (!dueDateStr) return null;
+        const due = parseISO(dueDateStr);
+        const today = startOfDay(new Date());
+        
+        if (isBefore(due, today)) {
+            const daysLate = differenceInDays(today, due);
+            return { isOverdue: true, days: daysLate };
+        }
+        return { isOverdue: false, days: 0 };
     };
     
     return (
@@ -147,31 +154,54 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
                     <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                         <thead className="bg-slate-50 dark:bg-slate-800">
                             <tr>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Title</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Checked Out By</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Checkout Date</th>
-                                <th scope="col" className="relative px-6 py-3"><span className="sr-only">Actions</span></th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Title</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Member</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Checkout Date</th>
+                                {/* ✅ New Column: Due Date */}
+                                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Due Date</th>
+                                <th className="relative px-6 py-3"><span className="sr-only">Actions</span></th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-slate-900 divide-y divide-slate-200 dark:divide-slate-700">
-                            {checkedOutBooks.map((book) => (
-                                <tr key={book.transactionId} className="even:bg-slate-50 dark:even:bg-slate-800/50">
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-white">{book.title}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{book.memberId} - {book.memberName}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{format(parseISO(book.checkoutDate), 'dd/MM/yyyy')}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                                        {onRenewLoan && (
-                                            <button 
-                                                onClick={() => handleRenewRequest(book)} 
-                                                className="text-indigo-600 hover:text-indigo-800 transition"
-                                            >
-                                                Renew
-                                            </button>
-                                        )}
-                                        <button onClick={() => requestCheckin(book)} className="text-green-600 hover:text-green-800 transition">Check-in</button>
-                                    </td>
-                                </tr>
-                            ))}
+                            {checkedOutBooks.map((book) => {
+                                const { isOverdue, days } = getOverdueStatus(book.dueDate);
+                                return (
+                                    <tr key={book.transactionId} className="even:bg-slate-50 dark:even:bg-slate-800/50">
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-white">{book.title}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                                            <div className="font-medium">{book.memberName}</div>
+                                            <div className="text-xs">ID: {book.memberId}</div>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{format(parseISO(book.checkoutDate), 'dd/MM/yyyy')}</td>
+                                        {/* ✅ Display Due Date & Overdue Status */}
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                            {book.dueDate ? (
+                                                <div>
+                                                    <span className={`font-semibold ${isOverdue ? 'text-red-600' : 'text-slate-700 dark:text-slate-300'}`}>
+                                                        {format(parseISO(book.dueDate), 'dd/MM/yyyy')}
+                                                    </span>
+                                                    {isOverdue && (
+                                                        <span className="block text-[10px] font-bold text-red-500 bg-red-50 dark:bg-red-900/30 px-2 py-0.5 rounded-full w-fit mt-1">
+                                                            Late by {days} day{days > 1 ? 's' : ''}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            ) : <span className="text-slate-400">N/A</span>}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                                            {onRenewLoan && (
+                                                <button 
+                                                    onClick={() => handleRenewRequest(book)} 
+                                                    className="text-indigo-600 hover:text-indigo-800 transition"
+                                                >
+                                                    Renew
+                                                </button>
+                                            )}
+                                            <button onClick={() => requestCheckin(book)} className="text-green-600 hover:text-green-800 transition font-bold">Check-in</button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                         </tbody>
                     </table>
                      {checkedOutBooks.length === 0 && <p className="text-center py-4 text-slate-500">No books are currently checked out.</p>}
@@ -187,11 +217,35 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
                 confirmText={isSubmitting ? "Returning..." : "Confirm Return"}
                 confirmButtonClass={`bg-green-600 hover:bg-green-700 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-                <div className="space-y-2">
-                    <p>Are you sure you want to check in the following book?</p>
-                    <div className="bg-slate-50 dark:bg-slate-700 p-3 rounded-md">
-                        <p className="font-semibold">{checkinCandidate?.title}</p>
-                        <p className="text-sm text-slate-600 dark:text-slate-300">Returned by: {checkinCandidate?.memberId} - {checkinCandidate?.memberName}</p>
+                <div className="space-y-4">
+                    <p className="text-slate-600 dark:text-slate-300">Are you sure you want to check in this book?</p>
+                    <div className="bg-slate-50 dark:bg-slate-700 p-4 rounded-lg border border-slate-200 dark:border-slate-600 space-y-2">
+                        <div className="flex justify-between">
+                            <span className="text-sm text-slate-500 dark:text-slate-400">Book:</span>
+                            <span className="text-sm font-bold dark:text-white">{checkinCandidate?.title}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-sm text-slate-500 dark:text-slate-400">Member:</span>
+                            <span className="text-sm font-medium dark:text-white">{checkinCandidate?.memberName} ({checkinCandidate?.memberId})</span>
+                        </div>
+                        
+                        {/* ✅ Due Date Info in Modal */}
+                        {checkinCandidate?.dueDate && (
+                            <div className="flex justify-between items-center pt-2 border-t dark:border-slate-600">
+                                <span className="text-sm text-slate-500 dark:text-slate-400">Due Date:</span>
+                                <div className="text-right">
+                                    <span className="text-sm font-bold dark:text-white block">
+                                        {format(parseISO(checkinCandidate.dueDate), 'dd/MM/yyyy')}
+                                    </span>
+                                    {getOverdueStatus(checkinCandidate.dueDate)?.isOverdue && (
+                                        <span className="text-xs text-red-600 font-bold flex items-center justify-end gap-1">
+                                            <ExclamationTriangleIcon className="h-3 w-3" />
+                                            Overdue ({getOverdueStatus(checkinCandidate.dueDate)?.days} days)
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </Modal>
@@ -210,6 +264,14 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
                         <p className="mb-2">Renewing book: <strong>{renewCandidate?.title}</strong></p>
                          <p className="text-sm text-slate-600 dark:text-slate-400">Current Member: {renewCandidate?.memberName} ({renewCandidate?.memberId})</p>
                     </div>
+                    
+                    {/* ✅ Show Current Due Date in Renew Modal too */}
+                    {renewCandidate?.dueDate && (
+                        <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded text-sm text-blue-800 dark:text-blue-200">
+                            Current Due Date: <strong>{format(parseISO(renewCandidate.dueDate), 'dd/MM/yyyy')}</strong>
+                        </div>
+                    )}
+
                     <div>
                          <label htmlFor="renewDays" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                              Days to Extend (Max 15)
