@@ -7,7 +7,6 @@ import Modal from './common/Modal';
 
 interface AddMemberProps {
     onAddMember: (member: Omit<Member, 'joinDate'>) => Promise<{ success: boolean, message: string, newMember?: Member }>;
-    // ✅ Updated to Promise to handle async DB operations
     onBulkAddMembers: (members: Omit<Member, 'joinDate'>[]) => Promise<{ success: number, failed: number, errors: string[] }>;
     showNotification: (message: string, type: 'success' | 'error') => void;
     existingMembers: Member[];
@@ -21,19 +20,21 @@ interface PreviewMemberItem {
 }
 
 const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, showNotification, existingMembers }) => {
+    // --- Form State ---
     const [id, setId] = useState('');
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [phoneNumber, setPhoneNumber] = useState('');
-    const [activeTab, setActiveTab] = useState<'manual' | 'bulk'>('manual');
     
-    // Confirmation Modal State
-    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+    // --- UI State ---
+    const [activeTab, setActiveTab] = useState<'manual' | 'bulk'>('manual');
+    const [isSubmitting, setIsSubmitting] = useState(false); // ✅ Loading State Added
 
-    // Upload Result State
+    // --- Modal State ---
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
     const [uploadResult, setUploadResult] = useState<{ success: number; failed: number; errors: string[] } | null>(null);
 
-    // Preview State
+    // --- Preview State ---
     const [previewItems, setPreviewItems] = useState<PreviewMemberItem[]>([]);
     const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
@@ -57,10 +58,20 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
         setIsConfirmModalOpen(true);
     };
 
+    // ✅ FIXED: Async/Await & Loading State
     const handleConfirmAdd = async () => {
+        if (isSubmitting) return; // Prevent double click
+        setIsSubmitting(true);
+
+        // ⏳ Wait for DB
         const result = await onAddMember({ id, name, email, phoneNumber });
+
+        setIsSubmitting(false);
+        setIsConfirmModalOpen(false);
+
         if (result.success && result.newMember) {
             showNotification(result.message, 'success');
+            // Clear Form
             setId('');
             setName('');
             setEmail('');
@@ -68,7 +79,6 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
         } else {
             showNotification(result.message, 'error');
         }
-        setIsConfirmModalOpen(false);
     };
 
     const processCSV = (text: string) => {
@@ -125,6 +135,7 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
                 continue;
             }
 
+            // Validation Logic
             if (!csvName || !csvPhone) {
                 parsedItems.push({
                     data: { id: csvId, name: csvName || 'Unknown', email: csvEmail, phoneNumber: csvPhone || 'Missing' },
@@ -190,18 +201,19 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
         setIsPreviewOpen(true);
     };
     
-    // ✅ FIXED FUNCTION: Waits for DB and hides modal on success
+    // ✅ FIXED: Async/Await for Bulk Upload
     const handleConfirmUpload = async (validItems: Omit<Member, 'joinDate'>[]) => {
-        // 1. Wait for DB Insertion to complete
+        if (isSubmitting) return;
+        setIsSubmitting(true);
+
         const result = await onBulkAddMembers(validItems);
         
+        setIsSubmitting(false);
         setIsPreviewOpen(false);
 
-        // 2. Only show Result Modal if there are FAILURES.
         if (result.failed > 0) {
             setUploadResult({ success: result.success, failed: result.failed, errors: result.errors });
         } else {
-            // Success Only: Don't show modal. App.tsx toast will handle "Success".
             setUploadResult(null); 
         }
     };
@@ -224,6 +236,8 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
         }
     };
 
+    // --- Render ---
+
     return (
         <div className="p-6">
             <h1 className="text-3xl font-bold text-slate-800 dark:text-white mb-6">Add Member</h1>
@@ -245,10 +259,11 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
                     </nav>
                 </div>
                 <div className="pt-6">
+                    {/* MANUAL FORM */}
                     {activeTab === 'manual' && (
                         <form onSubmit={handleManualSubmit} className="space-y-4">
                             <div>
-                                <label htmlFor="id" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Member ID (Optional)</label>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Member ID (Optional)</label>
                                 <input 
                                     type="text" 
                                     id="id" 
@@ -261,23 +276,25 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
                                 <p className="text-[10px] text-slate-400 mt-1">Natural numbers including zero (4 digits). Leave blank to auto-generate next ID.</p>
                             </div>
                             <div>
-                                <label htmlFor="name" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Full Name <span className="text-red-500">*</span></label>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Full Name <span className="text-red-500">*</span></label>
                                 <input type="text" id="name" value={name} onChange={e => { setName(e.target.value); }} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                             </div>
                             <div>
-                                <label htmlFor="phone" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Phone Number <span className="text-red-500">*</span></label>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Phone Number <span className="text-red-500">*</span></label>
                                 <input type="text" inputMode="numeric" id="phone" value={phoneNumber} onChange={handlePhoneChange} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="Numbers only"/>
                             </div>
                             <div>
-                                <label htmlFor="email" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Email Address <span className="text-slate-400 text-xs">(Optional)</span></label>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Email Address <span className="text-slate-400 text-xs">(Optional)</span></label>
                                 <input type="email" id="email" value={email} onChange={e => { setEmail(e.target.value); }} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                             </div>
                             <button type="submit" className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-bold shadow-md">Review & Add Member</button>
                         </form>
                     )}
+
+                    {/* BULK UPLOAD */}
                     {activeTab === 'bulk' && (
                         <div>
-                            <label htmlFor="bulk-upload" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload CSV File</label>
+                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload CSV File</label>
                             <p className="text-sm text-slate-500 mb-2">Format: ID (optional, 4-digits), Name, Phone (required), Email (optional)</p>
                             <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-slate-300 dark:border-slate-600 border-dashed rounded-md hover:border-indigo-400 transition-colors cursor-pointer group">
                                 <div className="space-y-1 text-center">
@@ -299,11 +316,12 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
 
             <Modal
                 isOpen={isConfirmModalOpen}
-                onClose={() => setIsConfirmModalOpen(false)}
+                // ✅ Loading Protection
+                onClose={() => !isSubmitting && setIsConfirmModalOpen(false)}
                 onConfirm={handleConfirmAdd}
                 title="Confirm New Member Details"
-                confirmText="Add Member"
-                confirmButtonClass="bg-indigo-600 hover:bg-indigo-700"
+                confirmText={isSubmitting ? "Adding..." : "Add Member"}
+                confirmButtonClass={`bg-indigo-600 hover:bg-indigo-700 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
                 <div className="space-y-3">
                     <p className="text-slate-600 dark:text-slate-300">Please review the details before adding:</p>
@@ -327,7 +345,8 @@ const AddMember: React.FC<AddMemberProps> = ({ onAddMember, onBulkAddMembers, sh
             
             <BulkUploadPreviewModal
                 isOpen={isPreviewOpen}
-                onClose={() => setIsPreviewOpen(false)}
+                // ✅ Loading Protection
+                onClose={() => !isSubmitting && setIsPreviewOpen(false)}
                 onConfirm={handleConfirmUpload}
                 items={previewItems}
                 title="Member Bulk Upload"

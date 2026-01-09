@@ -7,7 +7,6 @@ import Modal from './common/Modal';
 
 interface AddBookProps {
     onAddBook: (book: Omit<Book, 'id'>) => Promise<{ success: boolean, message: string, newBook?: Book }>;
-    // ✅ 1. Updated to Promise to support async/await
     onBulkAddBooks: (books: Omit<Book, 'id'>[]) => Promise<{ success: number, failed: number, errors: string[] }>;
     categories: string[];
     showNotification: (message: string, type: 'success' | 'error') => void;
@@ -22,28 +21,29 @@ interface PreviewBookItem {
 }
 
 const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories, showNotification, existingBooks }) => {
+    // --- State Management ---
     const [title, setTitle] = useState('');
     const [author, setAuthor] = useState('');
     const [isbn, setIsbn] = useState('');
-    
-    // Allow empty string for better typing experience
     const [totalCopies, setTotalCopies] = useState<number | string>(1);
-    
     const [language, setLanguage] = useState('');
     const [selectedCategory, setSelectedCategory] = useState('');
     const [newCategory, setNewCategory] = useState('');
     const [isAddingNewCategory, setIsAddingNewCategory] = useState(false);
+    
+    // UI States
     const [activeTab, setActiveTab] = useState<'manual' | 'bulk'>('manual');
+    const [isSubmitting, setIsSubmitting] = useState(false); // ✅ Loading State
 
-    // Confirmation Modal State
+    // Modal States
     const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
-
-    // Upload Result State
     const [uploadResult, setUploadResult] = useState<{ success: number; failed: number; errors: string[] } | null>(null);
     
-    // Preview State
+    // Preview States
     const [previewItems, setPreviewItems] = useState<PreviewBookItem[]>([]);
     const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+    // --- Handlers ---
 
     const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const value = e.target.value;
@@ -60,6 +60,7 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
     const handleManualSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         const category = isAddingNewCategory ? newCategory.trim() : selectedCategory;
+        
         if (!category) {
             showNotification('Please select or add a category.', 'error');
             return;
@@ -68,7 +69,6 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
             showNotification('Please enter the book language.', 'error');
             return;
         }
-        
         if (!totalCopies || Number(totalCopies) < 1) {
             showNotification('Total copies must be at least 1.', 'error');
             return;
@@ -79,14 +79,28 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
     };
 
     const handleConfirmAdd = async () => {
+        if (isSubmitting) return; // Prevent double click
+        setIsSubmitting(true);
+
         const category = isAddingNewCategory ? newCategory.trim() : selectedCategory;
         const copies = totalCopies === '' ? 1 : Number(totalCopies);
 
-        // ✅ Added await for manual add as well
-        const result = await onAddBook({ title, author, isbn, totalCopies: copies, category, language: language.trim() });
+        // ✅ AWAIT: Wait for DB/Offline Manager
+        const result = await onAddBook({ 
+            title, 
+            author, 
+            isbn, 
+            totalCopies: copies, 
+            category, 
+            language: language.trim() 
+        });
+
+        setIsSubmitting(false);
+        setIsConfirmModalOpen(false);
 
         if (result.success) {
             showNotification(result.message, 'success');
+            // Reset Form
             setTitle('');
             setAuthor('');
             setIsbn('');
@@ -98,7 +112,6 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
         } else {
             showNotification(result.message, 'error');
         }
-        setIsConfirmModalOpen(false);
     };
 
     const processCSV = (text: string) => {
@@ -140,8 +153,9 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
                 const copies = parseInt(csvCopies, 10) || 1;
                 const csvLanguage = parts.length > 5 ? parts[5] : 'English'; 
 
+                // Validation
                 if (!csvTitle || !csvAuthor || !csvIsbn || !csvCategory) {
-                     parsedItems.push({
+                      parsedItems.push({
                         data: { title: csvTitle || 'Unknown', author: csvAuthor || 'Unknown', isbn: csvIsbn || '?', category: csvCategory || '?', totalCopies: copies, language: csvLanguage },
                         status: 'error',
                         message: 'Missing required fields',
@@ -192,18 +206,20 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
         setIsPreviewOpen(true);
     };
 
-    // ✅ 2. FIXED FUNCTION: Added async/await and conditional result modal
     const handleConfirmUpload = async (validItems: Omit<Book, 'id'>[]) => {
-        // Wait for DB Insertion
+        if (isSubmitting) return;
+        setIsSubmitting(true);
+
+        // ✅ AWAIT: Wait for Bulk Add
         const result = await onBulkAddBooks(validItems);
         
+        setIsSubmitting(false);
         setIsPreviewOpen(false);
         
-        // Only show Result Modal if there are FAILURES.
         if (result.failed > 0) {
             setUploadResult({ success: result.success, failed: result.failed, errors: result.errors });
         } else {
-            setUploadResult(null); // Success case handled by App.tsx toast
+            setUploadResult(null); 
         }
     };
 
@@ -224,6 +240,8 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
             e.target.value = '';
         }
     };
+
+    // --- Render ---
 
     return (
         <div className="p-6">
@@ -246,27 +264,28 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
                     </nav>
                 </div>
                 <div className="pt-6">
+                    {/* MANUAL FORM */}
                     {activeTab === 'manual' && (
                         <form onSubmit={handleManualSubmit} className="space-y-4">
                             <div>
-                                <label htmlFor="title" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Title</label>
-                                <input type="text" id="title" value={title} onChange={e => setTitle(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
-                            </div>
-                             <div>
-                                <label htmlFor="author" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Author</label>
-                                <input type="text" id="author" value={author} onChange={e => setAuthor(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
-                            </div>
-                             <div>
-                                <label htmlFor="isbn" className="block text-sm font-medium text-slate-700 dark:text-slate-300">ISBN</label>
-                                <input type="text" id="isbn" value={isbn} onChange={e => setIsbn(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Title</label>
+                                <input type="text" value={title} onChange={e => setTitle(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                             </div>
                             <div>
-                                <label htmlFor="language" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Language</label>
-                                <input type="text" id="language" value={language} onChange={e => setLanguage(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Author</label>
+                                <input type="text" value={author} onChange={e => setAuthor(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                             </div>
                             <div>
-                                <label htmlFor="category" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Category</label>
-                                <select id="category" value={selectedCategory} onChange={handleCategoryChange} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">ISBN</label>
+                                <input type="text" value={isbn} onChange={e => setIsbn(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Language</label>
+                                <input type="text" value={language} onChange={e => setLanguage(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Category</label>
+                                <select value={selectedCategory} onChange={handleCategoryChange} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                                     <option value="" disabled>Select a category</option>
                                     {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                                     <option value="__NEW__">--- Add New Category ---</option>
@@ -274,15 +293,14 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
                             </div>
                             {isAddingNewCategory && (
                                 <div>
-                                    <label htmlFor="new-category" className="block text-sm font-medium text-slate-700 dark:text-slate-300">New Category Name</label>
-                                    <input type="text" id="new-category" value={newCategory} onChange={e => setNewCategory(e.target.value)} required={isAddingNewCategory} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">New Category Name</label>
+                                    <input type="text" value={newCategory} onChange={e => setNewCategory(e.target.value)} required={isAddingNewCategory} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                                 </div>
                             )}
                              <div>
-                                <label htmlFor="copies" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Total Copies</label>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Total Copies</label>
                                 <input 
                                     type="number" 
-                                    id="copies" 
                                     value={totalCopies} 
                                     onChange={e => {
                                         const val = e.target.value;
@@ -300,9 +318,11 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
                             <button type="submit" className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition">Review & Add Book</button>
                         </form>
                     )}
+
+                    {/* BULK UPLOAD */}
                     {activeTab === 'bulk' && (
                         <div>
-                             <label htmlFor="bulk-upload" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload CSV File</label>
+                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload CSV File</label>
                              <p className="text-sm text-slate-500 mb-2">Format: Title, Author, ISBN, Category, [Total Copies], [Language]</p>
                             <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-slate-300 dark:border-slate-600 border-dashed rounded-md">
                                 <div className="space-y-1 text-center">
@@ -324,11 +344,11 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
 
             <Modal
                 isOpen={isConfirmModalOpen}
-                onClose={() => setIsConfirmModalOpen(false)}
+                onClose={() => !isSubmitting && setIsConfirmModalOpen(false)}
                 onConfirm={handleConfirmAdd}
                 title="Confirm New Book Details"
-                confirmText="Add Book"
-                confirmButtonClass="bg-green-600 hover:bg-green-700"
+                confirmText={isSubmitting ? "Adding..." : "Add Book"}
+                confirmButtonClass={`bg-green-600 hover:bg-green-700 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
                 <div className="space-y-3">
                     <p className="text-slate-600 dark:text-slate-300">Please review the details before adding:</p>
@@ -360,7 +380,7 @@ const AddBook: React.FC<AddBookProps> = ({ onAddBook, onBulkAddBooks, categories
 
             <BulkUploadPreviewModal
                 isOpen={isPreviewOpen}
-                onClose={() => setIsPreviewOpen(false)}
+                onClose={() => !isSubmitting && setIsPreviewOpen(false)}
                 onConfirm={handleConfirmUpload}
                 items={previewItems}
                 title="Book Bulk Upload"

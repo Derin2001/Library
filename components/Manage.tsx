@@ -3,7 +3,7 @@ import { Book, Member, Transaction, Reservation, BookStatus, TransactionType, Ar
 import Card from './common/Card';
 import { parseISO, isWithinInterval, startOfMonth, endOfMonth, format } from 'date-fns';
 import Modal from './common/Modal';
-import { TrashIcon, PencilIcon, SearchIcon, ExclamationTriangleIcon, CogIcon, DownloadIcon, BookOpenIcon, UserIcon, ShieldCheckIcon, UsersIcon, KeyIcon } from './icons'; 
+import { TrashIcon, PencilIcon, SearchIcon, ExclamationTriangleIcon, CogIcon, DownloadIcon, BookOpenIcon, UserIcon, ShieldCheckIcon, UsersIcon } from './icons'; 
 import { downloadCSV, downloadPDF, downloadSummaryPDF } from '../lib/utils';
 import DownloadControl from './common/DownloadControl';
 import { useLocalStorage } from '../hooks/useLocalStorage';
@@ -55,12 +55,13 @@ interface ManageProps {
     archiveHistory: ArchiveRecord[];
     activityLog: ActivityLogEntry[];
     settings: Settings;
-    onUpdateBook: (bookId: string, updatedData: Partial<Omit<Book, 'id'>>) => { success: boolean, message: string };
-    onDeleteBook: (bookId: string) => void;
-    onUpdateMember: (memberId: string, updatedData: { id: string; name: string, email: string; phoneNumber: string }) => { success: boolean, message: string };
-    onDeleteMember: (memberId: string) => void;
-    onResetSystem: () => void;
-    onUpdateSettings: (settings: Settings) => { success: boolean, message: string };
+    // ✅ Updated all handlers to return Promises
+    onUpdateBook: (bookId: string, updatedData: Partial<Omit<Book, 'id'>>) => Promise<{ success: boolean, message: string }>;
+    onDeleteBook: (bookId: string) => Promise<any>;
+    onUpdateMember: (memberId: string, updatedData: { id: string; name: string, email: string; phoneNumber: string }) => Promise<{ success: boolean, message: string }>;
+    onDeleteMember: (memberId: string) => Promise<any>;
+    onResetSystem: () => Promise<any>;
+    onUpdateSettings: (settings: Settings) => Promise<{ success: boolean, message: string }>;
     showNotification: (message: string, type: 'success' | 'error') => void;
     onLogActivity: (action: string, details: string) => void;
 }
@@ -71,7 +72,9 @@ const Manage: React.FC<ManageProps> = ({
     librarianPassword, 
     verifyAdminForReset, 
     onUpdateAdminPassword, 
-    books, members, transactions, reservations, archiveHistory, activityLog, settings, onUpdateBook, onDeleteBook, onUpdateMember, onDeleteMember, onResetSystem, onUpdateSettings, showNotification, onLogActivity 
+    books, members, transactions, reservations, archiveHistory, activityLog, settings, 
+    onUpdateBook, onDeleteBook, onUpdateMember, onDeleteMember, onResetSystem, onUpdateSettings, 
+    showNotification, onLogActivity 
 }) => {
     
     const [activeView, setActiveView] = useLocalStorage<ManageView>('manageActiveView', 'menu');
@@ -80,6 +83,13 @@ const Manage: React.FC<ManageProps> = ({
     const [memberSearchTerm, setMemberSearchTerm] = useState('');
     const [bookSearchTerm, setBookSearchTerm] = useState('');
     
+    // --- Loading States ---
+    const [isBookSubmitting, setIsBookSubmitting] = useState(false);
+    const [isMemberSubmitting, setIsMemberSubmitting] = useState(false);
+    const [isSettingsSubmitting, setIsSettingsSubmitting] = useState(false);
+    const [isPassSubmitting, setIsPassSubmitting] = useState(false);
+    const [isResetSubmitting, setIsResetSubmitting] = useState(false);
+
     const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
     const [bookToDelete, setBookToDelete] = useState<Book | null>(null);
     
@@ -107,8 +117,6 @@ const Manage: React.FC<ManageProps> = ({
 
     // Archive History Viewer State
     const [viewingArchiveHistory, setViewingArchiveHistory] = useState<ArchiveRecord | null>(null);
-
-    // ✅ NEW STATE: For viewing Activity Log Batch details
     const [viewingLogEntry, setViewingLogEntry] = useState<ActivityLogEntry | null>(null);
 
     const memberActivityHistory = useMemo(() => {
@@ -132,6 +140,94 @@ const Manage: React.FC<ManageProps> = ({
     const filteredMembers = useMemo(() => members.filter(m => m.name.toLowerCase().includes(memberSearchTerm.toLowerCase()) || m.id.includes(memberSearchTerm)), [members, memberSearchTerm]);
     const filteredBooks = useMemo(() => books.filter(b => b.title.toLowerCase().includes(bookSearchTerm.toLowerCase()) || b.isbn.includes(bookSearchTerm) || b.id.includes(bookSearchTerm)), [books, bookSearchTerm]);
 
+    // --- Action Handlers with Await ---
+
+    const handleUpdateBook = async () => {
+        if (!bookToEdit) return;
+        setIsBookSubmitting(true);
+        const result = await onUpdateBook(bookToEdit.id, editBookData);
+        setIsBookSubmitting(false);
+        if (result && result.success) {
+            setBookToEdit(null);
+        }
+    };
+
+    const handleDeleteBook = async () => {
+        if (!bookToDelete) return;
+        setIsBookSubmitting(true);
+        await onDeleteBook(bookToDelete.id);
+        setIsBookSubmitting(false);
+        setBookToDelete(null);
+    };
+
+    const handleUpdateMember = async () => {
+        if (!memberToEdit) return;
+        setIsMemberSubmitting(true);
+        const result = await onUpdateMember(memberToEdit.id, editMemberData);
+        setIsMemberSubmitting(false);
+        if (result && result.success) {
+            setMemberToEdit(null);
+        }
+    };
+
+    const handleDeleteMember = async () => {
+        if (!memberToDelete) return;
+        setIsMemberSubmitting(true);
+        await onDeleteMember(memberToDelete.id);
+        setIsMemberSubmitting(false);
+        setMemberToDelete(null);
+    };
+
+    const handleUpdateSettings = async () => {
+        setIsSettingsSubmitting(true);
+        await onUpdateSettings({ ...settings, maxRenewals: parseInt(maxRenewalsInput), loanPeriodDays: parseInt(loanPeriodInput) });
+        setIsSettingsSubmitting(false);
+    };
+
+    const handleAdminPassUpdate = async () => {
+        if(newPass !== confirmPass) {
+            showNotification('Passwords do not match', 'error');
+            return;
+        }
+        if(newPass.length < 6) {
+            showNotification('Password too short', 'error');
+            return;
+        }
+        if(onUpdateAdminPassword) {
+            setIsPassSubmitting(true);
+            const res = await onUpdateAdminPassword(newPass);
+            setIsPassSubmitting(false);
+            if(res.success) {
+                setNewPass('');
+                setConfirmPass('');
+            }
+        }
+    }
+
+    const handleSystemReset = async () => {
+        setIsResetSubmitting(true);
+        await onResetSystem();
+        setIsResetSubmitting(false);
+        setResetStep(0);
+        setResetCheck(false);
+        setResetPassInput('');
+    };
+
+    const handleResetVerification = async () => {
+        if (verifyAdminForReset) {
+            const isValid = await verifyAdminForReset(resetPassInput);
+            if (isValid) {
+                setResetStep(3);
+            } else {
+                showNotification('Incorrect librarian password.', 'error');
+            }
+        } else {
+            if (resetPassInput === librarianPassword) setResetStep(3);
+            else showNotification('Incorrect password', 'error');
+        }
+    };
+
+    // --- Export Functions ---
     const handleDownloadAllBooks = (fmt: 'pdf' | 'csv') => {
         const data = books.map(b => ({ ID: b.id, Title: b.title, Author: b.author, ISBN: b.isbn, Category: b.category, Language: b.language, Copies: b.totalCopies }));
         if (fmt === 'pdf') downloadPDF(data, 'Library_Book_List.pdf', 'Complete Book Catalog');
@@ -185,38 +281,6 @@ const Manage: React.FC<ManageProps> = ({
         const topPatrons = popularMembers.slice(0, 5).map((m, i) => ({ Rank: i + 1, Name: m.name, Activity: m.count }));
 
         downloadSummaryPDF(`Monthly Summary - ${label}`, stats, topBooks, topPatrons);
-    };
-
-    const handleAdminPassUpdate = async () => {
-        if(newPass !== confirmPass) {
-            showNotification('Passwords do not match', 'error');
-            return;
-        }
-        if(newPass.length < 6) {
-            showNotification('Password too short', 'error');
-            return;
-        }
-        if(onUpdateAdminPassword) {
-            const res = await onUpdateAdminPassword(newPass);
-            if(res.success) {
-                setNewPass('');
-                setConfirmPass('');
-            }
-        }
-    }
-
-    const handleResetVerification = async () => {
-        if (verifyAdminForReset) {
-            const isValid = await verifyAdminForReset(resetPassInput);
-            if (isValid) {
-                setResetStep(3);
-            } else {
-                showNotification('Incorrect librarian password.', 'error');
-            }
-        } else {
-            if (resetPassInput === librarianPassword) setResetStep(3);
-            else showNotification('Incorrect password', 'error');
-        }
     };
 
     const renderContent = () => {
@@ -367,12 +431,11 @@ const Manage: React.FC<ManageProps> = ({
                                         <th className="px-4 py-3">Details</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                                <tbody className="divide-y divide-slate-5 dark:divide-slate-800">
                                     {activityLog.map(log => (
                                         <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                             <td className="px-4 py-4 text-xs text-slate-500 whitespace-nowrap">{format(parseISO(log.timestamp), 'dd/MM HH:mm:ss')}</td>
                                             <td className="px-4 py-4 font-bold text-slate-800 dark:text-indigo-400 text-xs">{log.action}</td>
-                                            {/* ✅ UPDATED: Batch View Logic */}
                                             <td className="px-4 py-4 text-xs text-slate-500 dark:text-slate-400">
                                                 {log.details.includes('Batch #') ? (
                                                     <button 
@@ -407,10 +470,10 @@ const Manage: React.FC<ManageProps> = ({
                         </select>
                         <div className="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-800">
                             <table className="min-w-full divide-y divide-slate-100 dark:divide-slate-800">
-                                <thead className="bg-slate-50 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-400 tracking-widest">
+                                <thead className="bg-slate-5 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-400 tracking-widest">
                                     <tr><th className="px-6 py-4 text-left">Date</th><th className="px-6 py-4 text-left">Action</th><th className="px-6 py-4 text-left">Resource</th></tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                                <tbody className="divide-y divide-slate-5 dark:divide-slate-800">
                                     {memberActivityHistory.map((h, i) => (
                                         <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                             <td className="px-6 py-4 text-xs text-slate-500">{h.date}</td>
@@ -432,7 +495,7 @@ const Manage: React.FC<ManageProps> = ({
                                 <thead className="text-[10px] font-black uppercase text-slate-400 tracking-widest">
                                     <tr><th className="px-4 py-3 text-left">Type</th><th className="px-4 py-3 text-left">Name</th><th className="px-4 py-3 text-left">History Summary</th><th className="px-4 py-3 text-left">Date Deleted</th><th className="px-4 py-3"></th></tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                                <tbody className="divide-y divide-slate-5 dark:divide-slate-800">
                                     {archiveHistory.map(a => (
                                         <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                             <td className="px-4 py-4 text-[10px] font-black text-slate-500">{a.type.split('_')[0]}</td>
@@ -491,19 +554,29 @@ const Manage: React.FC<ManageProps> = ({
                                         <input type="number" value={maxRenewalsInput} onChange={e => setMaxRenewalsInput(e.target.value)} className="mt-1 block w-full px-4 py-2 border rounded-xl dark:bg-slate-800 dark:border-slate-700" />
                                     </div>
                                 </div>
-                                <button onClick={() => onUpdateSettings({ ...settings, maxRenewals: parseInt(maxRenewalsInput), loanPeriodDays: parseInt(loanPeriodInput) })} className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition">Update Rules</button>
+                                <button 
+                                    onClick={handleUpdateSettings} 
+                                    disabled={isSettingsSubmitting}
+                                    className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition disabled:opacity-50"
+                                >
+                                    {isSettingsSubmitting ? 'Saving...' : 'Update Rules'}
+                                </button>
                             </div>
 
-                            {/* --- NEW PASSWORD CHANGE SECTION --- */}
                             <div className="pt-8 border-t border-slate-200 dark:border-slate-700 max-w-md">
                                 <h3 className="text-sm font-black uppercase tracking-widest text-slate-500 mb-4">Change Admin Password</h3>
                                 <div className="space-y-4">
                                     <input type="password" placeholder="New Password" value={newPass} onChange={e => setNewPass(e.target.value)} className="w-full px-4 py-2 border rounded-xl dark:bg-slate-800 dark:border-slate-700" />
                                     <input type="password" placeholder="Confirm Password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} className="w-full px-4 py-2 border rounded-xl dark:bg-slate-800 dark:border-slate-700" />
-                                    <button onClick={handleAdminPassUpdate} className="px-6 py-2 bg-slate-800 dark:bg-slate-700 text-white rounded-xl font-bold hover:bg-slate-900 transition">Update Password</button>
+                                    <button 
+                                        onClick={handleAdminPassUpdate} 
+                                        disabled={isPassSubmitting}
+                                        className="px-6 py-2 bg-slate-800 dark:bg-slate-700 text-white rounded-xl font-bold hover:bg-slate-900 transition disabled:opacity-50"
+                                    >
+                                        {isPassSubmitting ? 'Updating...' : 'Update Password'}
+                                    </button>
                                 </div>
                             </div>
-                            {/* ----------------------------------- */}
 
                             <div className="pt-8 border-t border-slate-200 dark:border-slate-700">
                                 <h3 className="text-lg font-bold text-rose-600 mb-2">Danger Zone</h3>
@@ -529,7 +602,6 @@ const Manage: React.FC<ManageProps> = ({
             </div>
             {renderContent()}
 
-            {/* ✅ NEW MODAL for Activity Log Batch Details */}
             <Modal
                 isOpen={!!viewingLogEntry}
                 onClose={() => setViewingLogEntry(null)}
@@ -548,7 +620,6 @@ const Manage: React.FC<ManageProps> = ({
                 </div>
             </Modal>
 
-            {/* Modal for Archive History Detail */}
             <Modal 
                 isOpen={!!viewingArchiveHistory} 
                 onClose={() => setViewingArchiveHistory(null)} 
@@ -605,15 +676,38 @@ const Manage: React.FC<ManageProps> = ({
             </Modal>
 
             {/* Modals for Deletion */}
-            <Modal isOpen={!!bookToDelete} onClose={() => setBookToDelete(null)} onConfirm={() => { if(bookToDelete) onDeleteBook(bookToDelete.id); setBookToDelete(null); }} title="Confirm Deletion" confirmText="Delete Forever">
+            <Modal 
+                isOpen={!!bookToDelete} 
+                onClose={() => !isBookSubmitting && setBookToDelete(null)} 
+                onConfirm={handleDeleteBook} 
+                title="Confirm Deletion" 
+                confirmText={isBookSubmitting ? "Deleting..." : "Delete Forever"}
+                confirmDisabled={isBookSubmitting}
+            >
                 <p>Delete <strong>{bookToDelete?.title}</strong>? All history for this book will be moved to archives.</p>
             </Modal>
-            <Modal isOpen={!!memberToDelete} onClose={() => setMemberToDelete(null)} onConfirm={() => { if(memberToDelete) onDeleteMember(memberToDelete.id); setMemberToDelete(null); }} title="Confirm Deletion" confirmText="Delete Member">
+            
+            <Modal 
+                isOpen={!!memberToDelete} 
+                onClose={() => !isMemberSubmitting && setMemberToDelete(null)} 
+                onConfirm={handleDeleteMember} 
+                title="Confirm Deletion" 
+                confirmText={isMemberSubmitting ? "Deleting..." : "Delete Member"}
+                confirmDisabled={isMemberSubmitting}
+            >
                 <p>Removing <strong>{memberToDelete?.name}</strong> will move their activity to the system archive.</p>
             </Modal>
             
-            {/* Modal for Edit Book - Updated with Category Input */}
-            <Modal isOpen={!!bookToEdit} onClose={() => setBookToEdit(null)} onConfirm={() => { if(bookToEdit) onUpdateBook(bookToEdit.id, editBookData); setBookToEdit(null); }} title="Edit Book" confirmText="Update Record" confirmButtonClass="bg-indigo-600">
+            {/* Modal for Edit Book */}
+            <Modal 
+                isOpen={!!bookToEdit} 
+                onClose={() => !isBookSubmitting && setBookToEdit(null)} 
+                onConfirm={handleUpdateBook} 
+                title="Edit Book" 
+                confirmText={isBookSubmitting ? "Updating..." : "Update Record"} 
+                confirmButtonClass="bg-indigo-600"
+                confirmDisabled={isBookSubmitting}
+            >
                 <div className="space-y-4">
                     <div className="flex items-center gap-2">
                         <span className="text-xs font-bold text-slate-400 uppercase">Book ID:</span>
@@ -629,7 +723,15 @@ const Manage: React.FC<ManageProps> = ({
             </Modal>
 
             {/* Modal for Edit Member */}
-            <Modal isOpen={!!memberToEdit} onClose={() => setMemberToEdit(null)} onConfirm={() => { if(memberToEdit) onUpdateMember(memberToEdit.id, editMemberData); setMemberToEdit(null); }} title="Edit Member" confirmText="Update Profile" confirmButtonClass="bg-indigo-600">
+            <Modal 
+                isOpen={!!memberToEdit} 
+                onClose={() => !isMemberSubmitting && setMemberToEdit(null)} 
+                onConfirm={handleUpdateMember} 
+                title="Edit Member" 
+                confirmText={isMemberSubmitting ? "Updating..." : "Update Profile"} 
+                confirmButtonClass="bg-indigo-600"
+                confirmDisabled={isMemberSubmitting}
+            >
                 <div className="space-y-4">
                     <input value={editMemberData.id} onChange={e => setEditMemberData({...editMemberData, id: e.target.value})} className="w-full p-2 border rounded-md font-mono" placeholder="4-digit ID" maxLength={4} />
                     <input value={editMemberData.name} onChange={e => setEditMemberData({...editMemberData, name: e.target.value})} className="w-full p-2 border rounded-md" placeholder="Name" />
@@ -663,7 +765,7 @@ const Manage: React.FC<ManageProps> = ({
                 </div>
             </Modal>
 
-            {/* Step 2: Password Prompt (Updated for Secure DB Check) */}
+            {/* Step 2: Password Prompt */}
             <Modal
                 isOpen={resetStep === 2}
                 onClose={() => setResetStep(0)}
@@ -687,16 +789,12 @@ const Manage: React.FC<ManageProps> = ({
             {/* Step 3: Final OK */}
             <Modal
                 isOpen={resetStep === 3}
-                onClose={() => setResetStep(0)}
-                onConfirm={() => {
-                    onResetSystem();
-                    setResetStep(0);
-                    setResetCheck(false);
-                    setResetPassInput('');
-                }}
+                onClose={() => !isResetSubmitting && setResetStep(0)}
+                onConfirm={handleSystemReset}
                 title="Final Confirmation"
-                confirmText="Reset Now"
+                confirmText={isResetSubmitting ? "Resetting..." : "Reset Now"}
                 confirmButtonClass="bg-red-600"
+                confirmDisabled={isResetSubmitting}
             >
                 <div className="space-y-3">
                     <p className="font-black text-red-600 text-xl text-center">LAST CHANCE</p>

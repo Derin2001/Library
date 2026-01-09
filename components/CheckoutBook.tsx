@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { Book, Member, BookStatus, Reservation, Transaction } from '../types';
 import Card from './common/Card';
@@ -15,7 +14,8 @@ interface CheckoutBookProps {
     books: BookWithAvailability[];
     members: Member[];
     categories: string[];
-    onCheckout: (bookId: string, memberId: string, dueDate: string, forceCheckout?: boolean) => { success: boolean; message: string; };
+    // ✅ Updated to Promise for async handling
+    onCheckout: (bookId: string, memberId: string, dueDate: string, forceCheckout?: boolean) => Promise<{ success: boolean; message: string; }>;
     reservations: Reservation[];
     transactions: Transaction[];
     showNotification: (message: string, type: 'success' | 'error') => void;
@@ -90,10 +90,11 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
     // Mercy Rule State
     const [isMercyModalOpen, setIsMercyModalOpen] = useState(false);
 
+    // ✅ Loading State Added
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     useEffect(() => {
         if (memberIdForCheckout) {
-            // STRICT CASE SENSITIVITY CHECK
             const member = members.find(m => m.id === memberIdForCheckout);
             setSelectedMemberForCheckout(member || null);
         } else {
@@ -139,7 +140,6 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
             const reservationPickupDate = startOfDay(parseISO(criticalReservation.pickupDate));
             const maxDate = subDays(reservationPickupDate, 1);
             
-            // Modified: Allow checkout even if maxDate is TODAY (0-day/same-day loan)
             const minDueDate = startOfDay(new Date()); 
             
             if (isBefore(maxDate, minDueDate)) {
@@ -163,38 +163,54 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
         setConfirmModalOpen(true);
     };
 
-    const handleCheckoutRequest = () => {
+    // ✅ FIXED: Async Checkout Request
+    const handleCheckoutRequest = async () => {
         if (bookToCheckout && selectedMemberForCheckout && dueDate) {
+             if (isSubmitting) return; // Prevent double click
+
              // Pre-check for active loans
              const memberId = selectedMemberForCheckout.id;
              const memberActiveLoans = transactions.filter(t => t.memberId === memberId && t.type === 'CheckOut').length;
              const memberReturnedLoans = transactions.filter(t => t.memberId === memberId && t.type === 'CheckIn').length;
              
+             // If Mercy needed, close Confirm and Open Mercy (No DB call yet)
              if (memberActiveLoans > memberReturnedLoans) {
-                 // Trigger Mercy Modal
                  setConfirmModalOpen(false);
                  setIsMercyModalOpen(true);
                  return;
              }
 
              // Normal Checkout
-            const result = onCheckout(bookToCheckout.id, selectedMemberForCheckout.id, new Date(dueDate).toISOString());
-            setConfirmModalOpen(false);
-            if (result.success) {
+             setIsSubmitting(true);
+             // ⏳ Wait for DB
+             const result = await onCheckout(bookToCheckout.id, selectedMemberForCheckout.id, new Date(dueDate).toISOString());
+             
+             setIsSubmitting(false);
+             setConfirmModalOpen(false);
+
+             if (result.success) {
                 showNotification(result.message, 'success');
                 setBookToCheckout(null);
                 setAdjustedDueDateMessage('');
                 setMaxDueDate(undefined);
-            } else {
+             } else {
                 showNotification(result.message, 'error');
-            }
+             }
         }
     };
 
-    const handleMercyCheckout = () => {
+    // ✅ FIXED: Async Mercy Checkout
+    const handleMercyCheckout = async () => {
         if (bookToCheckout && selectedMemberForCheckout && dueDate) {
-            const result = onCheckout(bookToCheckout.id, selectedMemberForCheckout.id, new Date(dueDate).toISOString(), true); // Force = true
+            if (isSubmitting) return;
+            setIsSubmitting(true);
+
+            // ⏳ Wait for DB
+            const result = await onCheckout(bookToCheckout.id, selectedMemberForCheckout.id, new Date(dueDate).toISOString(), true); // Force = true
+            
+            setIsSubmitting(false);
             setIsMercyModalOpen(false);
+
             if (result.success) {
                 showNotification(result.message, 'success');
                 setBookToCheckout(null);
@@ -288,12 +304,13 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
             
             <Modal
                 isOpen={confirmModalOpen}
-                onClose={() => setConfirmModalOpen(false)}
+                // ✅ Loading Protection
+                onClose={() => !isSubmitting && setConfirmModalOpen(false)}
                 onConfirm={handleCheckoutRequest}
                 title="Confirm Checkout"
-                confirmText="Confirm"
-                confirmButtonClass="bg-indigo-600 hover:bg-indigo-700"
-                confirmDisabled={!selectedMemberForCheckout}
+                confirmText={isSubmitting ? "Processing..." : "Confirm"}
+                confirmButtonClass={`bg-indigo-600 hover:bg-indigo-700 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                confirmDisabled={!selectedMemberForCheckout || isSubmitting}
             >
                 <div className="space-y-4">
                     <p>Checking out book: <strong>{bookToCheckout?.title}</strong></p>
@@ -324,7 +341,6 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
                             id="due-date"
                             value={dueDate}
                             onChange={(e) => setDueDate(e.target.value)}
-                            // Modified: min date is now Today, not tomorrow, to allow same-day loans
                             min={format(new Date(), 'yyyy-MM-dd')}
                             max={maxDueDate}
                             className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
@@ -345,11 +361,13 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
 
             <Modal
                 isOpen={isMercyModalOpen}
-                onClose={() => setIsMercyModalOpen(false)}
+                // ✅ Loading Protection
+                onClose={() => !isSubmitting && setIsMercyModalOpen(false)}
                 onConfirm={handleMercyCheckout}
                 title="Mercy Rule Override"
-                confirmText="Override & Checkout"
-                confirmButtonClass="bg-red-600 hover:bg-red-700"
+                confirmText={isSubmitting ? "Processing..." : "Override & Checkout"}
+                confirmButtonClass={`bg-red-600 hover:bg-red-700 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                confirmDisabled={isSubmitting}
             >
                 <div className="flex flex-col space-y-3">
                     <div className="flex items-start p-3 bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 rounded-md border border-red-200 dark:border-red-800">

@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { Book, Transaction, TransactionType, Member } from '../types';
 import Card from './common/Card';
@@ -20,8 +19,9 @@ interface CheckinBookProps {
     books: Book[];
     transactions: Transaction[];
     members: Member[];
-    onCheckin: (bookId: string, memberId: string, title: string) => void;
-    onRenewLoan?: (transactionId: string, daysToExtend?: number) => { success: boolean; message: string };
+    // ✅ Updated to Promise for async handling
+    onCheckin: (bookId: string, memberId: string, title: string) => Promise<any>;
+    onRenewLoan?: (transactionId: string, daysToExtend?: number) => Promise<{ success: boolean; message: string }>;
     showNotification: (message: string, type: 'success' | 'error') => void;
 }
 
@@ -32,6 +32,9 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
     // Renewal State
     const [renewCandidate, setRenewCandidate] = useState<CheckedOutBookInfo | null>(null);
     const [daysToExtend, setDaysToExtend] = useState(15);
+
+    // ✅ Loading State Added
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     const checkedOutBooks = useMemo(() => {
         const activeLoansMap = new Map<string, Transaction[]>();
@@ -89,12 +92,17 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
         setCheckinCandidate(book);
     };
 
-    const confirmCheckin = () => {
-        if (checkinCandidate) {
-            onCheckin(checkinCandidate.bookId, checkinCandidate.memberId, checkinCandidate.title);
-            showNotification(`${checkinCandidate.title} checked in successfully.`, 'success');
-            setCheckinCandidate(null);
-        }
+    // ✅ FIXED: Async Confirm Checkin
+    const confirmCheckin = async () => {
+        if (!checkinCandidate || isSubmitting) return;
+        setIsSubmitting(true);
+
+        // ⏳ Wait for DB operation
+        await onCheckin(checkinCandidate.bookId, checkinCandidate.memberId, checkinCandidate.title);
+        
+        // Note: Notification is handled in App.tsx now
+        setIsSubmitting(false);
+        setCheckinCandidate(null);
     };
     
     const handleRenewRequest = (book: CheckedOutBookInfo) => {
@@ -102,11 +110,22 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
         setDaysToExtend(15);
     };
 
-    const confirmRenew = () => {
-        if (onRenewLoan && renewCandidate) {
-            const result = onRenewLoan(renewCandidate.transactionId, daysToExtend);
-            showNotification(result.message, result.success ? 'success' : 'error');
-            setRenewCandidate(null);
+    // ✅ FIXED: Async Confirm Renew
+    const confirmRenew = async () => {
+        if (!onRenewLoan || !renewCandidate || isSubmitting) return;
+        setIsSubmitting(true);
+
+        // ⏳ Wait for DB operation
+        const result = await onRenewLoan(renewCandidate.transactionId, daysToExtend);
+        
+        setIsSubmitting(false);
+        
+        // Notification logic matches App.tsx return structure
+        // If App.tsx handles notification, this might be redundant but safe
+        if (!result.success) { 
+             showNotification(result.message, 'error');
+        } else {
+             setRenewCandidate(null);
         }
     };
     
@@ -159,13 +178,14 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
                 </div>
             </Card>
 
+            {/* Check-in Modal */}
             <Modal
                 isOpen={!!checkinCandidate}
-                onClose={() => setCheckinCandidate(null)}
+                onClose={() => !isSubmitting && setCheckinCandidate(null)}
                 onConfirm={confirmCheckin}
                 title="Confirm Check-in"
-                confirmText="Confirm Return"
-                confirmButtonClass="bg-green-600 hover:bg-green-700"
+                confirmText={isSubmitting ? "Returning..." : "Confirm Return"}
+                confirmButtonClass={`bg-green-600 hover:bg-green-700 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
                 <div className="space-y-2">
                     <p>Are you sure you want to check in the following book?</p>
@@ -176,13 +196,14 @@ const CheckinBook: React.FC<CheckinBookProps> = ({ books, transactions, members,
                 </div>
             </Modal>
             
+            {/* Renew Modal */}
             <Modal
                 isOpen={!!renewCandidate}
-                onClose={() => setRenewCandidate(null)}
+                onClose={() => !isSubmitting && setRenewCandidate(null)}
                 onConfirm={confirmRenew}
                 title="Renew Loan"
-                confirmText="Confirm Renewal"
-                confirmButtonClass="bg-indigo-600 hover:bg-indigo-700"
+                confirmText={isSubmitting ? "Renewing..." : "Confirm Renewal"}
+                confirmButtonClass={`bg-indigo-600 hover:bg-indigo-700 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
                 <div className="space-y-4">
                     <div>

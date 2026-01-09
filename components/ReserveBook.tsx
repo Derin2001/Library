@@ -136,6 +136,9 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
 
     const [isMemberSearchOpen, setIsMemberSearchOpen] = useState(false);
 
+    // ✅ Loading State Added
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
     useEffect(() => {
         if (memberId) {
             const member = members.find(m => m.id === memberId);
@@ -256,9 +259,11 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setMaxEditDateInfo(maxInfo);
     };
 
-    // ✅ FIXED: Added async/await for Date Change
+    // ✅ FIXED: Async Edit Date
     const handleConfirmDateChange = async () => {
         if (resToEdit && newEditDate) {
+            if (isSubmitting) return;
+            
             const newDate = parseISO(newEditDate);
             
             // Check for 15-day gap restriction
@@ -275,9 +280,12 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                 return;
             }
 
+            setIsSubmitting(true);
             const result = await onUpdateReservationDate(resToEdit.id, newEditDate);
+            
+            setIsSubmitting(false);
             showNotification(result.message, result.success ? 'success' : 'error');
-            setResToEdit(null);
+            if (result.success) setResToEdit(null);
         }
     };
 
@@ -296,13 +304,15 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setIsMemberSearchOpen(false);
     };
 
-    // ✅ FIXED: Added async/await for Reservation Submission
+    // ✅ FIXED: Async Reserve Submit
     const handleReserveSubmit = async () => {
         if (!bookToReserve || !memberId || !pickupDate) {
             showNotification("An unexpected error occurred. Please try again.", 'error');
             return;
         }
         
+        if (isSubmitting) return;
+
         const memberIdClean = memberId.trim();
         const memberExists = members.find(m => m.id === memberIdClean);
         if (!memberExists) {
@@ -335,8 +345,10 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
             return;
         }
 
-        // AWAITing the result to ensure we get the success status correctly
+        setIsSubmitting(true);
         const result = await onReserveBook({ bookId: bookToReserve.id, memberId: memberIdClean, pickupDate });
+        
+        setIsSubmitting(false);
         showNotification(result.message, result.success ? 'success' : 'error');
         
         if (result.success) {
@@ -353,19 +365,27 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setIsCancelModalOpen(true);
     };
 
-    // ✅ FIXED: Added async/await for Cancellation
+    // ✅ FIXED: Async Cancel
     const handleCancelReservation = async () => {
         if (reservationToCancel) {
+            if (isSubmitting) return;
+            setIsSubmitting(true);
             const result = await onCancelReservation(reservationToCancel.id);
+            
+            setIsSubmitting(false);
             showNotification(result.message, result.success ? 'success' : 'error');
         }
         setIsCancelModalOpen(false);
         setReservationToCancel(null);
     };
     
-    // ✅ FIXED: Added async/await for Issue Book
+    // ✅ FIXED: Async Issue
     const executeIssueBook = async (reservationId: string) => {
+         if (isSubmitting) return;
+         setIsSubmitting(true);
          const result = await onIssueBook(reservationId);
+         
+         setIsSubmitting(false);
          showNotification(result.message, result.success ? 'success' : 'error');
          setIssueWarningData(null);
          setIssueConfirmModalOpen(false);
@@ -525,21 +545,25 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
 
             <Modal
                 isOpen={isCancelModalOpen}
-                onClose={() => setIsCancelModalOpen(false)}
+                // ✅ Loading Check
+                onClose={() => !isSubmitting && setIsCancelModalOpen(false)}
                 onConfirm={handleCancelReservation}
                 title="Cancel Reservation"
-                confirmText="Yes, Cancel"
+                confirmText={isSubmitting ? "Cancelling..." : "Yes, Cancel"}
+                confirmDisabled={isSubmitting}
             >
                 Are you sure you want to cancel the reservation for "{getBookTitle(reservationToCancel?.bookId || '')}"? This action cannot be undone.
             </Modal>
 
             <Modal
                 isOpen={!!resToEdit}
-                onClose={() => setResToEdit(null)}
+                // ✅ Loading Check
+                onClose={() => !isSubmitting && setResToEdit(null)}
                 onConfirm={handleConfirmDateChange}
                 title="Update Pickup Date"
-                confirmText="Save Date"
+                confirmText={isSubmitting ? "Saving..." : "Save Date"}
                 confirmButtonClass="bg-indigo-600 hover:bg-indigo-700"
+                confirmDisabled={isSubmitting}
             >
                 <div className="space-y-4">
                     <p className="text-sm text-slate-600 dark:text-slate-300">
@@ -572,11 +596,13 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
             
              <Modal
                 isOpen={isConfirmModalOpen}
-                onClose={() => setIsConfirmModalOpen(false)}
+                // ✅ Loading Check
+                onClose={() => !isSubmitting && setIsConfirmModalOpen(false)}
                 onConfirm={handleReserveSubmit}
                 title={`Reserve: ${bookToReserve?.title}`}
-                confirmText="Confirm Reservation"
+                confirmText={isSubmitting ? "Processing..." : "Confirm Reservation"}
                 confirmButtonClass="bg-indigo-600 hover:bg-indigo-700"
+                confirmDisabled={isSubmitting}
             >
                 <div className="space-y-4">
                     <div>
@@ -623,11 +649,12 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                 onClose={() => setIssueWarningData(null)}
                 onConfirm={() => issueWarningData && executeIssueBook(issueWarningData.currentReservationId)}
                 title="Priority Conflict Warning"
-                confirmText="Yes, Issue Anyway"
+                confirmText={isSubmitting ? "Issuing..." : "Yes, Issue Anyway"}
                 confirmButtonClass="bg-amber-600 hover:bg-amber-700"
+                confirmDisabled={isSubmitting}
             >
                 <div className="flex flex-col space-y-3">
-                     <div className="flex items-start p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 rounded-md">
+                      <div className="flex items-start p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 rounded-md">
                         <ExclamationTriangleIcon className="h-6 w-6 mr-3 flex-shrink-0 mt-0.5" />
                         <div>
                              <h3 className="font-semibold text-lg mb-1">Wait! Earlier Reservation Found</h3>
@@ -644,11 +671,12 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
 
             <Modal
                 isOpen={issueConfirmModalOpen}
-                onClose={() => setIssueConfirmModalOpen(false)}
+                onClose={() => !isSubmitting && setIssueConfirmModalOpen(false)}
                 onConfirm={confirmIssue}
                 title="Confirm Issue Book"
-                confirmText="Issue Book"
+                confirmText={isSubmitting ? "Issuing..." : "Issue Book"}
                 confirmButtonClass="bg-green-600 hover:bg-green-700"
+                confirmDisabled={isSubmitting}
             >
                 <p>Are you sure you want to issue this reserved book to the member?</p>
             </Modal>
