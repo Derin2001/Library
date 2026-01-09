@@ -12,10 +12,13 @@ import CheckinBook from './components/CheckinBook';
 import ReserveBook from './components/ReserveBook';
 import Manage from './components/Manage';
 import MemberDashboard from './components/MemberDashboard';
-// ✅ UPDATED IMPORTS: Added subDays and format
 import { addDays, isBefore, parseISO, differenceInDays, formatISO, startOfDay, subDays, format } from 'date-fns';
 import Toast from './components/common/Toast';
 import { supabase } from './lib/supabase';
+
+// ✅ 1. IMPORT OFFLINE TOOLS
+import OfflineStatus from './components/OfflineStatus';
+import { handleLibraryAction } from './lib/OfflineManager';
 
 const App: React.FC = () => {
     // =========================================================================
@@ -29,47 +32,85 @@ const App: React.FC = () => {
     const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([]);
     const [archiveHistory, setArchiveHistory] = useState<any[]>([]);
 
+    const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+    const showNotification = useCallback((message: string, type: 'success' | 'error') => setNotification({ message, type }), []);
+    const closeNotification = () => setNotification(null);
+
     // =========================================================================
-    // 2. DATA LOADING FUNCTION
+    // 2. DATA LOADING FUNCTION (Updated for Offline Caching)
     // =========================================================================
     const fetchAllData = useCallback(async () => {
-        const [
-            booksRes,
-            membersRes,
-            transRes,
-            resRes,
-            settingsRes,
-            logRes,
-            archiveRes
-        ] = await Promise.all([
-            supabase.from('books').select('*'),
-            supabase.from('members').select('*'),
-            supabase.from('transactions').select('*'),
-            supabase.from('reservations').select('*'),
-            supabase.from('settings').select('*').eq('id', 1).single(),
-            supabase.from('activity_log').select('*').order('timestamp', { ascending: false }).limit(100),
-            supabase.from('archive_history').select('*').order('deletedDate', { ascending: false })
-        ]);
+        // A. ONLINE MODE: Fetch from Supabase -> Save to LocalStorage
+        if (navigator.onLine) {
+            const [
+                booksRes,
+                membersRes,
+                transRes,
+                resRes,
+                settingsRes,
+                logRes,
+                archiveRes
+            ] = await Promise.all([
+                supabase.from('books').select('*'),
+                supabase.from('members').select('*'),
+                supabase.from('transactions').select('*'),
+                supabase.from('reservations').select('*'),
+                supabase.from('settings').select('*').eq('id', 1).single(),
+                supabase.from('activity_log').select('*').order('timestamp', { ascending: false }).limit(100),
+                supabase.from('archive_history').select('*').order('deletedDate', { ascending: false })
+            ]);
 
-        if (booksRes.data) setBooks(booksRes.data);
-        if (membersRes.data) setMembers(membersRes.data);
-        if (transRes.data) setTransactions(transRes.data);
-        if (resRes.data) setReservations(resRes.data);
-        if (settingsRes.data) setSettings({ loanPeriodDays: settingsRes.data.loanPeriodDays, maxRenewals: settingsRes.data.maxRenewals });
-        if (logRes.data) setActivityLog(logRes.data);
+            if (booksRes.data) {
+                setBooks(booksRes.data);
+                localStorage.setItem('cached_books', JSON.stringify(booksRes.data));
+            }
+            if (membersRes.data) {
+                setMembers(membersRes.data);
+                localStorage.setItem('cached_members', JSON.stringify(membersRes.data));
+            }
+            if (transRes.data) {
+                setTransactions(transRes.data);
+                localStorage.setItem('cached_transactions', JSON.stringify(transRes.data));
+            }
+            if (resRes.data) {
+                setReservations(resRes.data);
+                localStorage.setItem('cached_reservations', JSON.stringify(resRes.data));
+            }
+            if (settingsRes.data) {
+                setSettings({ loanPeriodDays: settingsRes.data.loanPeriodDays, maxRenewals: settingsRes.data.maxRenewals });
+                localStorage.setItem('cached_settings', JSON.stringify(settingsRes.data));
+            }
+            if (logRes.data) setActivityLog(logRes.data);
 
-        if (archiveRes.data) {
-            const mappedArchive = archiveRes.data.map(a => ({
-                id: a.id,
-                type: a.itemType || 'UNKNOWN',
-                itemName: a.info || 'Unknown Item',
-                itemId: 'N/A',
-                deletedAt: a.deletedDate,
-                history: null 
-            }));
-            setArchiveHistory(mappedArchive);
+            if (archiveRes.data) {
+                const mappedArchive = archiveRes.data.map(a => ({
+                    id: a.id,
+                    type: a.itemType || 'UNKNOWN',
+                    itemName: a.info || 'Unknown Item',
+                    itemId: 'N/A',
+                    deletedAt: a.deletedDate,
+                    history: null 
+                }));
+                setArchiveHistory(mappedArchive);
+            }
+        } 
+        // B. OFFLINE MODE: Fetch from LocalStorage
+        else {
+            const cBooks = localStorage.getItem('cached_books');
+            const cMembers = localStorage.getItem('cached_members');
+            const cTrans = localStorage.getItem('cached_transactions');
+            const cRes = localStorage.getItem('cached_reservations');
+            const cSettings = localStorage.getItem('cached_settings');
+
+            if (cBooks) setBooks(JSON.parse(cBooks));
+            if (cMembers) setMembers(JSON.parse(cMembers));
+            if (cTrans) setTransactions(JSON.parse(cTrans));
+            if (cRes) setReservations(JSON.parse(cRes));
+            if (cSettings) setSettings(JSON.parse(cSettings));
+            
+            showNotification('You are offline. Loaded local data.', 'success');
         }
-    }, []);
+    }, [showNotification]);
 
     useEffect(() => {
         fetchAllData();
@@ -84,10 +125,6 @@ const App: React.FC = () => {
     const [currentView, setCurrentView] = useLocalStorage<View>('currentView', 'DASHBOARD');
 
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-    const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-    
-    const showNotification = useCallback((message: string, type: 'success' | 'error') => setNotification({ message, type }), []);
-    const closeNotification = () => setNotification(null);
 
     const mainContentRef = useRef<HTMLDivElement>(null);
     useEffect(() => { if (mainContentRef.current) mainContentRef.current.scrollTo(0, 0); }, [currentView]);
@@ -95,7 +132,10 @@ const App: React.FC = () => {
     const logActivity = useCallback(async (action: string, details: string) => {
         const newEntry = { id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, timestamp: new Date().toISOString(), action, details };
         setActivityLog(prev => [newEntry, ...prev]);
-        await supabase.from('activity_log').insert([newEntry]);
+        // Logs are always strictly online or fire-and-forget, keeping simple
+        if(navigator.onLine) {
+             await supabase.from('activity_log').insert([newEntry]);
+        }
     }, []);
 
     // =========================================================================
@@ -163,6 +203,18 @@ const App: React.FC = () => {
     };
 
     const verifyLogin = async (role: 'LIBRARIAN' | 'MEMBER', id?: string, password?: string): Promise<boolean> => {
+        if (!navigator.onLine) {
+            // Simple offline login check (Optional: can be improved)
+            if (role === 'MEMBER') {
+                 const member = members.find(m => m.id === id);
+                 if (member && password === `${member.id}@123`) {
+                    setIsLoggedIn(true); setUserRole('MEMBER'); setCurrentMemberId(member.id);
+                    return true;
+                 }
+            }
+            return false;
+        }
+
         if (role === 'LIBRARIAN' && id && password) {
             const { data, error } = await supabase.from('admin_auth').select('id').eq('username', id).eq('password', password).single();
             if (data && !error) { 
@@ -192,25 +244,28 @@ const App: React.FC = () => {
     }, [setIsLoggedIn, setCurrentView]);
 
     const handleUpdateAdminPassword = async (newPass: string) => {
-        const { error } = await supabase.from('admin_auth').update({ password: newPass }).eq('id', 1);
-        if (error) { showNotification('Failed to update password.', 'error'); return {success: false, message: 'Error'}; }
-        showNotification('Password updated successfully!', 'success');
+        const updateData = { id: 1, password: newPass };
+        handleLibraryAction('admin_auth', 'UPDATE', updateData, () => {
+            showNotification('Password updated successfully!', 'success');
+        });
         return {success: true, message: 'Updated'};
     };
 
     const handleVerifyAdminForReset = async (passwordInput: string) => {
+        if (!navigator.onLine) return false; // Reset verification only online
         try {
             const { data } = await supabase.from('admin_auth').select('id').eq('password', passwordInput).single();
             return !!data;
         } catch(e) { return false; }
     };
 
-    // --- BOOKS ---
+    // --- BOOKS (UPDATED WITH OFFLINE MANAGER) ---
     const handleUpdateBook = async (id: string, d: Partial<Omit<Book, 'id'>>) => {
-        const { error } = await supabase.from('books').update(d).eq('id', id);
-        if (error) { showNotification('Failed to update book.', 'error'); return {success: false, message: 'DB Error'}; }
-        setBooks(p => p.map(b => b.id === id ? {...b, ...d} : b));
-        showNotification(`Book updated.`, 'success');
+        const updateData = { id, ...d };
+        handleLibraryAction('books', 'UPDATE', updateData, () => {
+            setBooks(p => p.map(b => b.id === id ? {...b, ...d} : b));
+            showNotification(`Book updated successfully.`, 'success');
+        });
         return {success: true, message: 'Updated'};
     };
 
@@ -225,25 +280,29 @@ const App: React.FC = () => {
         }
 
         const book = books.find(b => b.id === id);
-        const { error } = await supabase.from('books').delete().eq('id', id);
-        if (error) { showNotification('Failed to delete book.', 'error'); return; }
         
-        if (book) {
-            const dbEntry = { id: `arch-${Date.now()}`, itemType: 'BOOK', info: `${book.title} by ${book.author}`, deletedDate: new Date().toISOString() };
-            await supabase.from('archive_history').insert([dbEntry]);
-            const uiEntry = { id: dbEntry.id, type: 'BOOK', itemName: book.title, itemId: book.id, deletedAt: dbEntry.deletedDate, history: null };
-            setArchiveHistory(p => [uiEntry, ...p]);
-        }
-        setBooks(p => p.filter(b => b.id !== id));
-        showNotification('Book deleted & archived', 'success');
+        handleLibraryAction('books', 'DELETE', { id }, async () => {
+            if (book) {
+                // Keep archive history as online-only or separate to keep offline logic simple
+                if(navigator.onLine) {
+                    const dbEntry = { id: `arch-${Date.now()}`, itemType: 'BOOK', info: `${book.title} by ${book.author}`, deletedDate: new Date().toISOString() };
+                    await supabase.from('archive_history').insert([dbEntry]);
+                    const uiEntry = { id: dbEntry.id, type: 'BOOK', itemName: book.title, itemId: book.id, deletedAt: dbEntry.deletedDate, history: null };
+                    setArchiveHistory(p => [uiEntry, ...p]);
+                }
+            }
+            setBooks(p => p.filter(b => b.id !== id));
+            showNotification('Book deleted successfully.', 'success');
+        });
     };
 
-    // --- MEMBERS ---
+    // --- MEMBERS (UPDATED WITH OFFLINE MANAGER) ---
     const handleUpdateMember = async (oldId: string, d: any) => {
-        const { error } = await supabase.from('members').update(d).eq('id', oldId);
-        if (error) { showNotification('Failed to update member.', 'error'); return {success: false, message: 'DB Error'}; }
-        setMembers(p => p.map(m => m.id === oldId ? {...m, ...d} : m));
-        showNotification('Member updated', 'success');
+        const updateData = { id: oldId, ...d };
+        handleLibraryAction('members', 'UPDATE', updateData, () => {
+            setMembers(p => p.map(m => m.id === oldId ? {...m, ...d} : m));
+            showNotification('Member updated successfully', 'success');
+        });
         return {success: true, message: 'Updated'};
     };
 
@@ -265,29 +324,31 @@ const App: React.FC = () => {
         }
 
         const member = members.find(m => m.id === id);
-        const { error } = await supabase.from('members').delete().eq('id', id);
-        if (error) { showNotification('Failed to delete member.', 'error'); return; }
-        
-        if (member) {
-            const dbEntry = { id: `arch-${Date.now()}`, itemType: 'MEMBER', info: `${member.name} (ID: ${member.id})`, deletedDate: new Date().toISOString() };
-            await supabase.from('archive_history').insert([dbEntry]);
-            const uiEntry = { id: dbEntry.id, type: 'MEMBER', itemName: member.name, itemId: member.id, deletedAt: dbEntry.deletedDate, history: null };
-            setArchiveHistory(p => [uiEntry, ...p]);
-        }
-        setMembers(p => p.filter(m => m.id !== id));
-        showNotification('Member deleted & archived', 'success');
+
+        handleLibraryAction('members', 'DELETE', { id }, async () => {
+            if (member && navigator.onLine) {
+                const dbEntry = { id: `arch-${Date.now()}`, itemType: 'MEMBER', info: `${member.name} (ID: ${member.id})`, deletedDate: new Date().toISOString() };
+                await supabase.from('archive_history').insert([dbEntry]);
+                const uiEntry = { id: dbEntry.id, type: 'MEMBER', itemName: member.name, itemId: member.id, deletedAt: dbEntry.deletedDate, history: null };
+                setArchiveHistory(p => [uiEntry, ...p]);
+            }
+            setMembers(p => p.filter(m => m.id !== id));
+            showNotification('Member deleted successfully', 'success');
+        });
     };
 
-    // --- SETTINGS ---
+    // --- SETTINGS (UPDATED) ---
     const handleUpdateSettings = async (newSettings: Settings) => {
-        const { error } = await supabase.from('settings').update(newSettings).eq('id', 1);
-        if (error) { showNotification('Failed to update settings.', 'error'); return {success: false, message: 'Error'}; }
-        setSettings(newSettings);
-        showNotification('Settings updated globally.', 'success');
+        const updateData = { id: 1, ...newSettings };
+        handleLibraryAction('settings', 'UPDATE', updateData, () => {
+             setSettings(newSettings);
+             showNotification('Settings updated globally.', 'success');
+        });
         return {success: true, message: 'Updated'};
     };
 
     const handleResetSystem = async () => { 
+        if(!navigator.onLine) { alert("System reset requires Internet!"); return; }
         if(!window.confirm("Are you sure? This will delete EVERYTHING from the database!")) return;
         await supabase.from('transactions').delete().neq('id', '0');
         await supabase.from('reservations').delete().neq('id', '0');
@@ -300,186 +361,180 @@ const App: React.FC = () => {
         showNotification('System Reset Complete.', 'success');
     };
 
-    // ✅ SMART RENEW: Allow renewal until the day before reservation
+    // --- RENEWAL (UPDATED WITH OFFLINE MANAGER) ---
     const handleRenewLoan = async (transactionId: string) => {
         const loan = transactions.find(t => t.id === transactionId);
         if (!loan) return { success: false, message: 'Record not found.' };
 
-        // 1. Calculate Standard New Due Date (Full Loan Period)
         const currentDueDateObj = loan.dueDate ? parseISO(loan.dueDate) : parseISO(loan.date);
         let newDueDate = addDays(currentDueDateObj, settings.loanPeriodDays);
         let message = 'Loan renewed successfully.';
 
-        // 2. CHECK FOR CONFLICTING RESERVATIONS
+        // Conflict check logic
         const book = books.find(b => b.id === loan.bookId);
         if (book) {
-            // Find active reservations for this book that start BEFORE the full extension ends
             const conflictingReservations = reservations.filter(r =>
                 r.bookId === loan.bookId &&
                 r.status === 'Active' &&
                 isBefore(parseISO(r.pickupDate), newDueDate)
             ).sort((a, b) => parseISO(a.pickupDate).getTime() - parseISO(b.pickupDate).getTime());
 
-            // Check shelf availability (Total copies - Checked Out + Checked In)
             const checkOuts = transactions.filter(t => t.bookId === loan.bookId && t.type === TransactionType.CheckOut).length;
             const checkIns = transactions.filter(t => t.bookId === loan.bookId && t.type === TransactionType.CheckIn).length;
             const currentOnShelf = book.totalCopies - (checkOuts - checkIns);
 
-            // If conflict exists AND no spare copies on shelf
             if (conflictingReservations.length > currentOnShelf) {
                 const earliestRes = conflictingReservations[0];
                 const resPickupDate = parseISO(earliestRes.pickupDate);
-                
-                // Cap the due date to ONE DAY BEFORE the reservation pickup
                 const cappedDueDate = subDays(resPickupDate, 1);
 
-                // Check if capped date is valid (must be in the future compared to current due date)
                 if (isBefore(cappedDueDate, currentDueDateObj) || cappedDueDate.getTime() === currentDueDateObj.getTime()) {
                     const resDateStr = format(resPickupDate, 'dd/MM/yyyy');
                     showNotification(`Cannot renew: Reservation starts on ${resDateStr}.`, 'error');
                     return { success: false, message: 'Blocked by Reservation' };
                 }
-
-                // Apply the shortened date
                 newDueDate = cappedDueDate;
                 message = `Renewed only until ${format(newDueDate, 'dd/MM/yyyy')} due to an upcoming reservation.`;
             }
         }
 
-        // 3. Update Database
         const newRenewalCount = (loan.renewalCount || 0) + 1;
-        const { error } = await supabase.from('transactions').update({ dueDate: newDueDate.toISOString(), renewalCount: newRenewalCount }).eq('id', transactionId);
-
-        if (error) { 
-            showNotification('Failed to renew.', 'error'); 
-            return { success: false, message: 'DB Error' }; 
-        }
-
-        // 4. Update Local State
-        setTransactions(prev => prev.map(t => t.id === transactionId ? { ...t, dueDate: newDueDate.toISOString(), renewalCount: newRenewalCount } : t));
         
-        logActivity('Renew Loan', `Renewed ${loan.bookTitle} until ${format(newDueDate, 'yyyy-MM-dd')}`);
-        
-        // Show success message (even if shortened)
-        showNotification(message, 'success');
+        // Prepare Data for Update
+        const updateData = { 
+            id: transactionId, 
+            dueDate: newDueDate.toISOString(), 
+            renewalCount: newRenewalCount 
+        };
+
+        handleLibraryAction('transactions', 'UPDATE', updateData, () => {
+             setTransactions(prev => prev.map(t => t.id === transactionId ? { ...t, dueDate: newDueDate.toISOString(), renewalCount: newRenewalCount } : t));
+             logActivity('Renew Loan', `Renewed ${loan.bookTitle} until ${format(newDueDate, 'yyyy-MM-dd')}`);
+             showNotification(message, 'success');
+        });
+
         return { success: true, message: 'Renewed' };
     };
 
-    // --- TRANSACTION ACTIONS ---
+    // --- TRANSACTION ACTIONS (UPDATED) ---
     const handleCheckout = async (bid: string, mid: string, dd: string) => {
         const book = books.find(b => b.id === bid);
         if (!book) return {success: false, message: 'Book not found'};
         const memberName = members.find(m => m.id === mid)?.name || 'Unknown';
-        const trans = { id: `T${Date.now()}`, bookId: bid, bookTitle: book.title, memberId: mid, memberName: memberName, type: TransactionType.CheckOut, date: new Date().toISOString(), dueDate: dd, renewalCount: 0 };
-        const { error } = await supabase.from('transactions').insert([trans]);
-        if (error) { showNotification('Checkout failed in DB.', 'error'); return {success: false, message: 'DB Error'}; }
-        setTransactions(p => [...p, trans]);
-        logActivity('Checkout', `Issued ${book.title} to ${mid}`);
-        showNotification('Checkout Saved to DB.', 'success');
+        
+        const trans = { 
+            id: `T${Date.now()}`, 
+            bookId: bid, 
+            bookTitle: book.title, 
+            memberId: mid, 
+            memberName: memberName, 
+            type: TransactionType.CheckOut, 
+            date: new Date().toISOString(), 
+            dueDate: dd, 
+            renewalCount: 0 
+        };
+
+        handleLibraryAction('transactions', 'INSERT', trans, () => {
+            setTransactions(p => [...p, trans]);
+            logActivity('Checkout', `Issued ${book.title} to ${mid}`);
+            showNotification(`Checkout successful: "${book.title}" to ${memberName}`, 'success');
+        });
         return {success: true, message: 'Checkout successful'};
     };
 
     const handleCheckin = async (bid: string, mid: string, title: string) => {
         const memberName = members.find(m => m.id === mid)?.name || 'Unknown';
-        const trans = { id: `T${Date.now()}`, bookId: bid, bookTitle: title, memberId: mid, memberName: memberName, type: TransactionType.CheckIn, date: new Date().toISOString() };
-        const { error } = await supabase.from('transactions').insert([trans]);
-        if (error) { showNotification('Check-in failed in DB.', 'error'); return; }
-        setTransactions(p => [...p, trans]);
-        logActivity('Check-in', `Returned ${title} from ${mid}`);
-        showNotification('Book Return Saved to DB.', 'success');
+        const trans = { 
+            id: `T${Date.now()}`, 
+            bookId: bid, 
+            bookTitle: title, 
+            memberId: mid, 
+            memberName: memberName, 
+            type: TransactionType.CheckIn, 
+            date: new Date().toISOString() 
+        };
+
+        handleLibraryAction('transactions', 'INSERT', trans, () => {
+            setTransactions(p => [...p, trans]);
+            logActivity('Check-in', `Returned ${title} from ${mid}`);
+            showNotification(`Returned successful: "${title}"`, 'success');
+        });
     };
 
-    // --- RESERVATION ACTIONS ---
+    // --- RESERVATION ACTIONS (UPDATED) ---
     const handleReserveBook = async (r: Omit<Reservation, 'id' | 'reservationDate' | 'status'>) => {
         const nr = { ...r, id: `R${Date.now()}`, reservationDate: new Date().toISOString(), status: 'Active' as const };
-        const { error } = await supabase.from('reservations').insert([nr]);
-        if(error) { showNotification('Reservation failed in DB.', 'error'); return {success: false, message: 'DB Error'}; }
-        setReservations(p => [...p, nr]);
-        logActivity('Reserve Book', `Reserved book ID ${r.bookId}`);
-        showNotification('Reservation Saved to DB.', 'success');
+        
+        handleLibraryAction('reservations', 'INSERT', nr, () => {
+             setReservations(p => [...p, nr]);
+             logActivity('Reserve Book', `Reserved book ID ${r.bookId}`);
+             showNotification('Reservation saved successfully.', 'success');
+        });
         return {success: true, message: 'Reserved'};
     };
 
     const handleCancelReservation = async (id: string) => {
-        const { error } = await supabase.from('reservations').update({ status: 'Cancelled' }).eq('id', id);
-        if(error) { showNotification('Failed to cancel in DB.', 'error'); return {success: false, message: 'DB Error'}; }
-        setReservations(p => p.map(r => r.id === id ? {...r, status: 'Cancelled'} : r));
-        showNotification('Reservation cancelled.', 'success');
+        const updateData = { id, status: 'Cancelled' };
+        handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+            setReservations(p => p.map(r => r.id === id ? {...r, status: 'Cancelled'} : r));
+            showNotification('Reservation cancelled.', 'success');
+        });
         return {success: true, message: 'Cancelled'};
     };
 
     const handleIssueReservedBook = async (id: string) => {
-        const { error } = await supabase.from('reservations').update({ status: 'Fulfilled' }).eq('id', id);
-        if(error) { showNotification('Failed to update DB.', 'error'); return {success: false, message: 'DB Error'}; }
-        setReservations(p => p.map(r => r.id === id ? {...r, status: 'Fulfilled'} : r));
-        showNotification('Reserved book issued (DB updated).', 'success');
+        const updateData = { id, status: 'Fulfilled' };
+        handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+             setReservations(p => p.map(r => r.id === id ? {...r, status: 'Fulfilled'} : r));
+             showNotification('Reserved book issued successfully.', 'success');
+        });
         return {success: true, message: 'Issued'};
     };
 
     const handleUpdateReservationDate = async (id: string, date: string) => {
-        const { error } = await supabase.from('reservations').update({ pickupDate: date }).eq('id', id);
-        if(error) { showNotification('Failed to update date in DB.', 'error'); return { success: false, message: 'DB Error' }; }
-        setReservations(prev => prev.map(r => r.id === id ? { ...r, pickupDate: date } : r));
-        showNotification('Reservation date updated.', 'success');
+        const updateData = { id, pickupDate: date };
+        handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+            setReservations(prev => prev.map(r => r.id === id ? { ...r, pickupDate: date } : r));
+            showNotification('Reservation date updated.', 'success');
+        });
         return { success: true, message: 'Date updated.' };
     };
 
     const handleCancelOverdueReservation = async (id: string) => {
-        const { error } = await supabase.from('reservations').update({ status: 'Cancelled (Overdue)' }).eq('id', id); 
-        if(error) { showNotification('DB Error cancelling.', 'error'); return; }
-        setReservations(prev => prev.map(r => r.id === id ? {...r, status: 'Cancelled (Overdue)'} : r)); 
-        showNotification('Reservation cancelled.', 'success'); 
+        const updateData = { id, status: 'Cancelled (Overdue)' };
+        handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+            setReservations(prev => prev.map(r => r.id === id ? {...r, status: 'Cancelled (Overdue)'} : r)); 
+            showNotification('Overdue reservation cancelled.', 'success'); 
+        });
     };
 
-    // --- ADDING HANDLERS ---
+    // --- ADDING HANDLERS (UPDATED) ---
     const handleAddBook = async (b: Book) => {
         const nb = {...b, id: generateBookId()};
-        const { error } = await supabase.from('books').insert([nb]);
-        if (error) { showNotification('Failed to save book.', 'error'); return { success: false, message: 'Failed' }; }
-        setBooks(p => [...p, nb]);
         
-        // ✅ NEW: Log added for manual book entry
-        logActivity('Add Book', `Added: ${nb.title} (ID: ${nb.id})`);
-        
-        showNotification(`Book added to DB.`, 'success');
+        handleLibraryAction('books', 'INSERT', nb, () => {
+             setBooks(p => [...p, nb]);
+             logActivity('Add Book', `Added: ${nb.title} (ID: ${nb.id})`);
+             showNotification(`Book "${nb.title}" added successfully.`, 'success');
+        });
         return {success: true, message: 'Added', newBook: nb};
     };
 
-    // ✅ FIXED: Bulk Book Add - Unique ID & Detailed Logging
+    // NOTE: Bulk operations are kept Online-Only for safety
     const handleBulkAddBooks = async (bs: Omit<Book, 'id'>[]) => {
-        // 1. Find current max ID to start sequential generation
+        if(!navigator.onLine) { showNotification("Bulk add requires internet!", "error"); return { success: 0, failed: bs.length, errors: ['Offline'] }; }
         const numericIds = books.map(b => b.id.startsWith('A') ? parseInt(b.id.substring(1)) : NaN).filter(n => !isNaN(n));
         let maxId = numericIds.length > 0 ? Math.max(...numericIds) : 0;
-
-        // 2. Create new books with IDs
         const newBooks = bs.map((b, index) => ({
             ...b,
-            id: 'A' + (maxId + index + 1).toString().padStart(3, '0') // Auto-increment ID
+            id: 'A' + (maxId + index + 1).toString().padStart(3, '0') 
         }));
-
-        // 3. Insert into Database
         const { error } = await supabase.from('books').insert(newBooks as any);
-
-        if (error) {
-            console.error("Bulk Book Insert Error:", error);
-            return { success: 0, failed: bs.length, errors: [error.message] };
-        }
-
-        // 4. Update Local State
+        if (error) { return { success: 0, failed: bs.length, errors: [error.message] }; }
         setBooks(p => [...p, ...newBooks]);
-
-        // 5. ✅ Create Detailed Log
         const batchId = Math.floor(1000 + Math.random() * 9000);
-        
-        // Create a list of titles for the log
         const bookList = newBooks.map(b => `- ${b.title} (ID: ${b.id})`).join('\n');
-        
-        // Log properly with await
-        await logActivity(
-            'Bulk Add Books', 
-            `Batch #${batchId}: Added ${bs.length} books.\n\nBooks Added:\n${bookList}`
-        );
-
+        await logActivity('Bulk Add Books', `Batch #${batchId}: Added ${bs.length} books.\n\nBooks Added:\n${bookList}`);
         showNotification(`${bs.length} books added successfully.`, 'success');
         return {success: bs.length, failed: 0, errors: []};
     };
@@ -488,21 +543,21 @@ const App: React.FC = () => {
         const finalId = m.id ? m.id.padStart(4, '0') : generateMemberId();
         if (members.some(member => member.id === finalId)) return { success: false, message: `Member ID ${finalId} exists.` };
         const nm = {...m, id: finalId, joinDate: new Date().toISOString()};
-        const { error } = await supabase.from('members').insert([nm]);
-        if (error) { showNotification('Failed to save member.', 'error'); return { success: false, message: 'Failed' }; }
-        setMembers(p => [...p, nm]);
         
-        logActivity('Add Member', `Added: ${nm.name} (ID: ${nm.id})`);
-        
-        showNotification(`Member added to DB.`, 'success');
+        handleLibraryAction('members', 'INSERT', nm, () => {
+             setMembers(p => [...p, nm]);
+             logActivity('Add Member', `Added: ${nm.name} (ID: ${nm.id})`);
+             showNotification(`Member "${nm.name}" added successfully.`, 'success');
+        });
         return {success: true, message: 'Added', newMember: nm};
     };
 
+    // Bulk operations kept online-only
     const handleBulkAddMembers = async (ms: Member[]) => {
+        if(!navigator.onLine) { showNotification("Bulk add requires internet!", "error"); return { success: 0, failed: ms.length, errors: ['Offline'] }; }
         const numericIds = members.map(m => parseInt(m.id)).filter(n => !isNaN(n));
         let maxId = numericIds.length > 0 ? Math.max(...numericIds) : 0;
         let autoIdCounter = 1;
-
         const newMembers = ms.map(m => {
             let finalId = m.id;
             if (!finalId) {
@@ -513,22 +568,18 @@ const App: React.FC = () => {
             }
             return { ...m, id: finalId, joinDate: new Date().toISOString() };
         });
-
         const { error } = await supabase.from('members').insert(newMembers);
         if (error) return {success: 0, failed: ms.length, errors: []};
         setMembers(p => [...p, ...newMembers]);
-        
-        // Log Batch ID
         const batchId = Math.floor(1000 + Math.random() * 9000);
         const ids = newMembers.map(m => `- ${m.name} (${m.id})`).join('\n');
         logActivity('Bulk Add Members', `Batch #${batchId}: Added ${ms.length} members.\n\nMembers Added:\n${ids}`);
-        
         showNotification(`${ms.length} members added.`, 'success');
         return {success: ms.length, failed: 0, errors: []};
     };
 
     // =========================================================================
-    // 6. RENDER
+    // 6. RENDER (Updated with OfflineStatus)
     // =========================================================================
 
     if (!isLoggedIn) return <Login onLogin={verifyLogin} onLoginAttempt={(s, u) => logActivity(s ? 'Login' : 'Login Failed', `User: ${u}`)} />;
@@ -545,15 +596,19 @@ const App: React.FC = () => {
                         transactions={transactions} 
                         reservations={reservations} 
                         onCancelReservation={async (id) => { 
-                            const {error} = await supabase.from('reservations').update({status: 'Cancelled (Member)'}).eq('id', id);
-                            if(error) { showNotification('Error cancelling', 'error'); return {success: false, message: 'Error'}; }
-                            setReservations(prev => prev.map(r => r.id === id ? {...r, status: 'Cancelled (Member)'} : r)); 
-                            showNotification('Reservation cancelled.', 'success'); return {success: true, message: 'Cancelled'}; 
+                             // Using handleLibraryAction for member cancel too
+                             const updateData = { id, status: 'Cancelled (Member)' };
+                             handleLibraryAction('reservations', 'UPDATE', updateData, () => {
+                                setReservations(prev => prev.map(r => r.id === id ? {...r, status: 'Cancelled (Member)'} : r)); 
+                                showNotification('Reservation cancelled.', 'success');
+                             });
+                             return {success: true, message: 'Cancelled'}; 
                         }} 
                         showNotification={showNotification} 
                         settings={settings} 
                     />
                 </main>
+                <OfflineStatus />
                 {notification && <Toast message={notification.message} type={notification.type} onClose={closeNotification} />}
             </div>
         );
@@ -664,6 +719,10 @@ const App: React.FC = () => {
                     )}
                 </main>
             </div>
+            
+            {/* ✅ OFFLINE STATUS UI ADDED HERE */}
+            <OfflineStatus />
+            
             {notification && <Toast message={notification.message} type={notification.type} onClose={closeNotification} />}
         </div>
     );

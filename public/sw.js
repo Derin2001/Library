@@ -1,4 +1,4 @@
-const cacheName = 'mahss-lib-v4'; // വേർഷൻ 4
+const cacheName = 'mahss-lib-v5'; // വേർഷൻ 4
 
 const assets = [
   './',
