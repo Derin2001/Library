@@ -18,7 +18,7 @@ interface ReserveBookProps {
     categories: string[];
     booksWithAvailability: BookWithAvailability[];
     transactions: Transaction[];
-    // ✅ Updated types to return Promise
+    // Updated types to return Promise
     onReserveBook: (reservation: { bookId: string; memberId: string; pickupDate: string; }) => Promise<{ success: boolean; message: string }>;
     onCancelReservation: (reservationId: string) => Promise<{ success: boolean; message: string }>;
     onIssueBook: (reservationId: string) => Promise<{ success: boolean; message: string }>;
@@ -136,7 +136,7 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
 
     const [isMemberSearchOpen, setIsMemberSearchOpen] = useState(false);
 
-    // ✅ Loading State Added
+    // Loading State
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     useEffect(() => {
@@ -259,7 +259,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setMaxEditDateInfo(maxInfo);
     };
 
-    // ✅ FIXED: Async Edit Date
     const handleConfirmDateChange = async () => {
         if (resToEdit && newEditDate) {
             if (isSubmitting) return;
@@ -304,7 +303,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setIsMemberSearchOpen(false);
     };
 
-    // ✅ FIXED: Async Reserve Submit
     const handleReserveSubmit = async () => {
         if (!bookToReserve || !memberId || !pickupDate) {
             showNotification("An unexpected error occurred. Please try again.", 'error');
@@ -365,7 +363,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setIsCancelModalOpen(true);
     };
 
-    // ✅ FIXED: Async Cancel
     const handleCancelReservation = async () => {
         if (reservationToCancel) {
             if (isSubmitting) return;
@@ -379,7 +376,7 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setReservationToCancel(null);
     };
     
-    // ✅ FIXED: Async Issue
+    // ✅ FIXED: Async Issue with Availability Check (Problem 3 Fix)
     const executeIssueBook = async (reservationId: string) => {
          if (isSubmitting) return;
          setIsSubmitting(true);
@@ -401,6 +398,14 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
     const handleIssue = (reservationId: string) => {
         const targetReservation = reservations.find(r => r.id === reservationId);
         if (!targetReservation) return;
+
+        // ✅ CHECK: Are there copies available to issue?
+        const bookInStock = booksWithAvailability.find(b => b.id === targetReservation.bookId);
+        if (!bookInStock || bookInStock.availableCopies <= 0) {
+            showNotification(`Cannot issue book. All copies of "${bookInStock?.title || 'this book'}" are currently checked out.`, 'error');
+            return;
+        }
+
         const memberExists = members.some(m => m.id === targetReservation.memberId);
         if (!memberExists) {
             showNotification(`Cannot issue book. Member (ID: ${targetReservation.memberId}) not found in database.`, 'error');
@@ -508,7 +513,8 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                         </div>
 
                         {filteredReservations.length > 0 ? (
-                             <ul className="space-y-3 max-h-[70vh] overflow-y-auto">
+                             {/* ✅ PROBLEM 2 FIX: Matched height to max-h-[60vh] to align with left side */}
+                             <ul className="space-y-3 max-h-[60vh] overflow-y-auto">
                                 {filteredReservations.map(res => {
                                     return (
                                         <li key={res.id} className="p-3 bg-slate-100 dark:bg-slate-800/50 rounded-lg">
