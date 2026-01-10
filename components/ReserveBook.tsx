@@ -77,14 +77,10 @@ const MemberSearchModal: React.FC<{
 
 const getStatusChip = (status: BookStatus) => {
     switch (status) {
-        case BookStatus.OnShelf:
-            return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Available</span>;
-        case BookStatus.Reserved:
-            return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">Reserved</span>;
-        case BookStatus.Unavailable:
-            return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Unavailable</span>;
-        default:
-            return null;
+        case BookStatus.OnShelf: return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Available</span>;
+        case BookStatus.Reserved: return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">Reserved</span>;
+        case BookStatus.Unavailable: return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Unavailable</span>;
+        default: return null;
     }
 };
 
@@ -116,12 +112,10 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
     const [reservationToCancel, setReservationToCancel] = useState<Reservation | null>(null);
     const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
 
-    // Edit Date State
     const [resToEdit, setResToEdit] = useState<Reservation | null>(null);
     const [newEditDate, setNewEditDate] = useState('');
     const [maxEditDateInfo, setMaxEditDateInfo] = useState<{ date: Date, isReservationLimit: boolean, limitedByMember?: string } | null>(null);
     
-    // New state for issuing confirmation
     const [issueConfirmModalOpen, setIssueConfirmModalOpen] = useState(false);
     const [selectedReservationId, setSelectedReservationId] = useState<string | null>(null);
     
@@ -133,8 +127,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
     } | null>(null);
 
     const [isMemberSearchOpen, setIsMemberSearchOpen] = useState(false);
-
-    // Loading State
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     useEffect(() => {
@@ -160,9 +152,7 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
 
     const filteredReservations = useMemo(() => {
         const activeReservations = reservations.filter(res => res.status === 'Active');
-        
         if (!reservationSearchTerm.trim()) return activeReservations;
-        
         const lowerTerm = reservationSearchTerm.toLowerCase();
         return activeReservations.filter(res => {
             const book = books.find(b => b.id === res.bookId);
@@ -246,7 +236,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                 limitedByMember: member ? member.name : blockingRes.memberId 
             };
         }
-
         return { date: addDays(new Date(), 90), isReservationLimit: false };
     };
 
@@ -260,10 +249,8 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
     const handleConfirmDateChange = async () => {
         if (resToEdit && newEditDate) {
             if (isSubmitting) return;
-            
             const newDate = parseISO(newEditDate);
             
-            // Check for 15-day gap restriction
             const conflictingReservation = reservations.find(r => 
                 r.id !== resToEdit.id &&
                 r.memberId === resToEdit.memberId && 
@@ -299,6 +286,48 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setMemberId(member.id);
         setSelectedMember(member);
         setIsMemberSearchOpen(false);
+    };
+
+    // ✅ PROBLEM 13 FIX: Helper to check availability across loan duration
+    const checkAvailabilityForPeriod = (book: Book, startDate: Date) => {
+        const loanDays = settings.loanPeriodDays;
+        // Check against other Active Reservations
+        const otherReservations = reservations.filter(r => 
+            r.bookId === book.id && 
+            r.status === 'Active' &&
+            r.memberId !== memberId.trim()
+        );
+
+        // Check against Current Active Loans
+        const activeLoans = transactions.filter(t => 
+            t.bookId === book.id && 
+            t.type === TransactionType.CheckOut
+        );
+
+        // Loop through each day of the requested reservation period
+        for (let d = 0; d < loanDays; d++) {
+            const checkDate = addDays(startDate, d);
+            let usedCopies = 0;
+
+            // Count blocked by Reservations
+            usedCopies += otherReservations.filter(r => {
+                const rStart = parseISO(r.pickupDate);
+                const rEnd = addDays(rStart, loanDays);
+                return (checkDate >= rStart && checkDate < rEnd);
+            }).length;
+
+            // Count blocked by Active Loans
+            usedCopies += activeLoans.filter(t => {
+                const loanDate = parseISO(t.date);
+                const dueDate = t.dueDate ? parseISO(t.dueDate) : addDays(loanDate, loanDays);
+                return (checkDate < dueDate); 
+            }).length;
+
+            if (usedCopies >= book.totalCopies) {
+                return { available: false, conflictDate: checkDate };
+            }
+        }
+        return { available: true };
     };
 
     const handleReserveSubmit = async () => {
@@ -341,6 +370,20 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
             return;
         }
 
+        // ✅ Rule 3: STRICT AVAILABILITY CHECK (Problem 13 Fix)
+        const availability = checkAvailabilityForPeriod(bookToReserve, requestedDate);
+        if (!availability.available) {
+            showNotification(`Unavailable: All copies are booked/issued around ${format(availability.conflictDate!, 'dd/MM/yyyy')}. Please choose a later date.`, 'error');
+            
+            // Suggest next date
+            const nextAvailable = calculateEarliestAvailableDate(bookToReserve);
+            if (isAfter(nextAvailable, requestedDate)) {
+                 setPickupDate(format(nextAvailable, 'yyyy-MM-dd'));
+                 showNotification(`Suggestion: Next available date is ${format(nextAvailable, 'dd/MM/yyyy')}`, 'success');
+            }
+            return;
+        }
+
         setIsSubmitting(true);
         const result = await onReserveBook({ bookId: bookToReserve.id, memberId: memberIdClean, pickupDate });
         
@@ -366,7 +409,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
             if (isSubmitting) return;
             setIsSubmitting(true);
             const result = await onCancelReservation(reservationToCancel.id);
-            
             setIsSubmitting(false);
             showNotification(result.message, result.success ? 'success' : 'error');
         }
@@ -374,12 +416,10 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         setReservationToCancel(null);
     };
     
-    // ✅ FIXED: Async Issue with Availability Check (Problem 3 Fix)
     const executeIssueBook = async (reservationId: string) => {
          if (isSubmitting) return;
          setIsSubmitting(true);
          const result = await onIssueBook(reservationId);
-         
          setIsSubmitting(false);
          showNotification(result.message, result.success ? 'success' : 'error');
          setIssueWarningData(null);
@@ -397,7 +437,7 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
         const targetReservation = reservations.find(r => r.id === reservationId);
         if (!targetReservation) return;
 
-        // ✅ CHECK: Are there copies available to issue?
+        // Problem 3 Fix: Check copies before issue
         const bookInStock = booksWithAvailability.find(b => b.id === targetReservation.bookId);
         if (!bookInStock || bookInStock.availableCopies <= 0) {
             showNotification(`Cannot issue book. All copies of "${bookInStock?.title || 'this book'}" are currently checked out.`, 'error');
@@ -463,15 +503,16 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                                 {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                             </select>
                         </div>
-                        <div className="overflow-auto max-h-[60vh]">
+                        {/* ✅ UI FIX: Forced Height for equality */}
+                        <div className="overflow-auto h-[60vh]">
                             <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                                 <thead className="bg-slate-50 dark:bg-slate-800 sticky top-0">
                                     <tr>
-                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Title</th>
-                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Author</th>
-                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Lang</th>
-                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
-                                        <th scope="col" className="relative px-6 py-3"><span className="sr-only">Reserve</span></th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Title</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Author</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Lang</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
+                                        <th className="relative px-6 py-3"><span className="sr-only">Reserve</span></th>
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white dark:bg-slate-900 divide-y divide-slate-200 dark:divide-slate-700">
@@ -482,12 +523,7 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{book.language}</td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">{getStatusChip(book.status)}</td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                <button 
-                                                    onClick={() => handleOpenReservationModal(book)}
-                                                    className="text-indigo-600 hover:text-indigo-900 disabled:text-slate-400 disabled:cursor-not-allowed transition"
-                                                >
-                                                    Reserve
-                                                </button>
+                                                <button onClick={() => handleOpenReservationModal(book)} className="text-indigo-600 hover:text-indigo-900 transition">Reserve</button>
                                             </td>
                                         </tr>
                                     ))}
@@ -509,33 +545,21 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                             />
                             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                         </div>
-
+                        {/* ✅ UI FIX: Forced Height for equality */}
                         {filteredReservations.length > 0 ? (
-                             <ul className="space-y-3 max-h-[60vh] overflow-y-auto">
-                                {filteredReservations.map(res => {
-                                    return (
-                                        <li key={res.id} className="p-3 bg-slate-100 dark:bg-slate-800/50 rounded-lg">
-                                            <p className="font-semibold text-sm text-slate-800 dark:text-slate-200">{getBookTitle(res.bookId)}</p>
-                                            <p className="text-xs text-slate-500 dark:text-slate-400">For: {res.memberId} - {getMemberName(res.memberId)}</p>
-                                            <p className="text-xs text-slate-500 dark:text-slate-400">Pickup: {format(parseISO(res.pickupDate), 'dd/MM/yyyy')}</p>
-                                            <div className="flex justify-end items-center space-x-3 mt-2">
-                                                 <button
-                                                    onClick={() => handleIssue(res.id)}
-                                                    className="text-green-600 hover:text-green-800 text-xs font-medium"
-                                                >
-                                                    Issue
-                                                </button>
-                                                <button
-                                                    onClick={() => handleOpenEditDate(res)}
-                                                    className="text-indigo-600 hover:text-indigo-800 text-xs font-medium flex items-center"
-                                                >
-                                                    <PencilIcon className="h-3 w-3 mr-1" /> Change Date
-                                                </button>
-                                                <button onClick={() => openCancelModal(res)} className="text-red-600 hover:text-red-800 text-xs font-medium">Cancel</button>
-                                            </div>
-                                        </li>
-                                    )
-                                })}
+                             <ul className="space-y-3 h-[60vh] overflow-y-auto">
+                                {filteredReservations.map(res => (
+                                    <li key={res.id} className="p-3 bg-slate-100 dark:bg-slate-800/50 rounded-lg">
+                                        <p className="font-semibold text-sm text-slate-800 dark:text-slate-200">{getBookTitle(res.bookId)}</p>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400">For: {res.memberId} - {getMemberName(res.memberId)}</p>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400">Pickup: {format(parseISO(res.pickupDate), 'dd/MM/yyyy')}</p>
+                                        <div className="flex justify-end items-center space-x-3 mt-2">
+                                             <button onClick={() => handleIssue(res.id)} className="text-green-600 hover:text-green-800 text-xs font-medium">Issue</button>
+                                            <button onClick={() => handleOpenEditDate(res)} className="text-indigo-600 hover:text-indigo-800 text-xs font-medium flex items-center"><PencilIcon className="h-3 w-3 mr-1" /> Change Date</button>
+                                            <button onClick={() => openCancelModal(res)} className="text-red-600 hover:text-red-800 text-xs font-medium">Cancel</button>
+                                        </div>
+                                    </li>
+                                ))}
                             </ul>
                         ) : (
                              <p className="text-center py-4 text-slate-500 text-sm">No active reservations found.</p>
@@ -548,7 +572,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
 
             <Modal
                 isOpen={isCancelModalOpen}
-                // ✅ Loading Check
                 onClose={() => !isSubmitting && setIsCancelModalOpen(false)}
                 onConfirm={handleCancelReservation}
                 title="Cancel Reservation"
@@ -560,7 +583,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
 
             <Modal
                 isOpen={!!resToEdit}
-                // ✅ Loading Check
                 onClose={() => !isSubmitting && setResToEdit(null)}
                 onConfirm={handleConfirmDateChange}
                 title="Update Pickup Date"
@@ -585,13 +607,8 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                         />
                          {maxEditDateInfo?.isReservationLimit && (
                             <p className="mt-2 text-xs text-amber-600 dark:text-amber-400 font-medium bg-amber-50 dark:bg-amber-900/20 p-2 rounded">
-                                Extension limit: <strong>{getFormattedDate(maxEditDateInfo.date)}</strong>. This is due to the next reservation by <strong>{maxEditDateInfo.limitedByMember}</strong> on <strong>{getFormattedDate(addDays(maxEditDateInfo.date, settings.loanPeriodDays))}</strong>.
+                                Extension limit: <strong>{getFormattedDate(maxEditDateInfo.date)}</strong>. This is due to the next reservation by <strong>{maxEditDateInfo.limitedByMember}</strong>.
                             </p>
-                        )}
-                        {!maxEditDateInfo?.isReservationLimit && (
-                             <p className="mt-2 text-xs text-slate-500 font-medium italic">
-                                No upcoming reservations hinder this pickup; extension up to 90 days allowed.
-                             </p>
                         )}
                     </div>
                 </div>
@@ -599,7 +616,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
             
              <Modal
                 isOpen={isConfirmModalOpen}
-                // ✅ Loading Check
                 onClose={() => !isSubmitting && setIsConfirmModalOpen(false)}
                 onConfirm={handleReserveSubmit}
                 title={`Reserve: ${bookToReserve?.title}`}
@@ -611,38 +627,15 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                     <div>
                         <label htmlFor="member" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Member ID</label>
                         <div className="flex gap-2 mt-1">
-                            <input 
-                                type="text" 
-                                id="member" 
-                                value={memberId} 
-                                onChange={e => setMemberId(e.target.value)}
-                                required 
-                                placeholder="Enter Member ID"
-                                className="w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-md shadow-sm"
-                            />
-                            <button onClick={() => setIsMemberSearchOpen(true)} className="flex-shrink-0 px-4 py-2 bg-slate-200 dark:bg-slate-700 rounded-md hover:bg-slate-300 dark:hover:bg-slate-600 transition">
-                                Search
-                            </button>
+                            <input type="text" id="member" value={memberId} onChange={e => setMemberId(e.target.value)} required placeholder="Enter Member ID" className="w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-md shadow-sm" />
+                            <button onClick={() => setIsMemberSearchOpen(true)} className="flex-shrink-0 px-4 py-2 bg-slate-200 dark:bg-slate-700 rounded-md hover:bg-slate-300 dark:hover:bg-slate-600 transition">Search</button>
                         </div>
                         {selectedMember && <p className="text-xs text-slate-500 mt-1">Selected: <span className="font-medium">{selectedMember.id} - {selectedMember.name}</span></p>}
                         {!selectedMember && memberId && <p className="text-xs text-red-500 mt-1">Member ID not found.</p>}
                     </div>
                       <div>
                         <label htmlFor="pickupDate" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Pickup Date</label>
-                        <input 
-                            type="date" 
-                            id="pickupDate" 
-                            value={pickupDate} 
-                            onChange={e => setPickupDate(e.target.value)} 
-                            required 
-                            className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-md shadow-sm"
-                            min={format(addDays(new Date(), 1), 'yyyy-MM-dd')} 
-                        />
-                        {pickupDate && (
-                            <p className="mt-1 text-sm text-indigo-600 dark:text-indigo-400">
-                                Selected Date: {getFormattedDate(pickupDate)}
-                            </p>
-                        )}
+                        <input type="date" id="pickupDate" value={pickupDate} onChange={e => setPickupDate(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-md shadow-sm" min={format(addDays(new Date(), 1), 'yyyy-MM-dd')} />
                     </div>
                 </div>
             </Modal>
@@ -661,12 +654,8 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                         <ExclamationTriangleIcon className="h-6 w-6 mr-3 flex-shrink-0 mt-0.5" />
                         <div>
                              <h3 className="font-semibold text-lg mb-1">Wait! Earlier Reservation Found</h3>
-                             <p className="text-sm">
-                                This book was reserved earlier by member <span className="font-bold">{issueWarningData?.conflictingMemberId} - {issueWarningData?.conflictingMemberName}</span> with a pickup date of <span className="font-bold">{issueWarningData && format(parseISO(issueWarningData.conflictingPickupDate), 'dd/MM/yyyy')}</span>.
-                             </p>
-                             <p className="text-sm mt-2">
-                                Do you wish to continue and issue the book to the current member anyway?
-                             </p>
+                             <p className="text-sm">This book was reserved earlier by member <span className="font-bold">{issueWarningData?.conflictingMemberId}</span> with a pickup date of <span className="font-bold">{issueWarningData && format(parseISO(issueWarningData.conflictingPickupDate), 'dd/MM/yyyy')}</span>.</p>
+                             <p className="text-sm mt-2">Do you wish to continue and issue the book to the current member anyway?</p>
                         </div>
                       </div>
                 </div>
