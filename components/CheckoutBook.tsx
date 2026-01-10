@@ -14,7 +14,6 @@ interface CheckoutBookProps {
     books: BookWithAvailability[];
     members: Member[];
     categories: string[];
-    // ✅ Updated to Promise for async handling
     onCheckout: (bookId: string, memberId: string, dueDate: string, forceCheckout?: boolean) => Promise<{ success: boolean; message: string; }>;
     reservations: Reservation[];
     transactions: Transaction[];
@@ -71,7 +70,6 @@ const MemberSearchModal: React.FC<{
     );
 };
 
-
 const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories, onCheckout, reservations, transactions, showNotification }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedCategory, setSelectedCategory] = useState('All');
@@ -87,10 +85,13 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
     const [adjustedDueDateMessage, setAdjustedDueDateMessage] = useState('');
     const [maxDueDate, setMaxDueDate] = useState<string | undefined>(undefined);
 
-    // Mercy Rule State
+    // Mercy Rule States
     const [isMercyModalOpen, setIsMercyModalOpen] = useState(false);
+    
+    // ✅ NEW: Reservation Conflict Modal State (Problem 1 Fix)
+    const [isResConflictModalOpen, setIsResConflictModalOpen] = useState(false);
+    const [resConflictDetails, setResConflictDetails] = useState<string>('');
 
-    // ✅ Loading State Added
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     useEffect(() => {
@@ -142,9 +143,16 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
             
             const minDueDate = startOfDay(new Date()); 
             
+            // ✅ PROBLEM 1 FIX: Show modal instead of blocking directly
             if (isBefore(maxDate, minDueDate)) {
-                showNotification(`Cannot check out. This book is needed for an upcoming reservation today or has passed.`, 'error');
-                return;
+                setResConflictDetails(`This book is reserved for ${format(reservationPickupDate, 'dd/MM/yyyy')}. Providing it to another member will conflict with the reservation.`);
+                setBookToCheckout(book); // Keep book selected for override option
+                setMemberIdForCheckout('');
+                setSelectedMemberForCheckout(null);
+                setDueDate(format(minDueDate, 'yyyy-MM-dd')); // Default to today if overriding
+                
+                setIsResConflictModalOpen(true); // Open Warning Modal
+                return; 
             }
 
             setMaxDueDate(format(maxDate, 'yyyy-MM-dd'));
@@ -163,17 +171,23 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
         setConfirmModalOpen(true);
     };
 
-    // ✅ FIXED: Async Checkout Request
+    // ✅ PROBLEM 1 FIX: Override Function
+    const handleOverrideReservationConflict = () => {
+        setIsResConflictModalOpen(false);
+        setConfirmModalOpen(true); // Proceed to normal checkout screen
+        setAdjustedDueDateMessage("⚠️ WARNING: You are overriding an active reservation.");
+    };
+
     const handleCheckoutRequest = async () => {
         if (bookToCheckout && selectedMemberForCheckout && dueDate) {
-             if (isSubmitting) return; // Prevent double click
+             if (isSubmitting) return;
 
              // Pre-check for active loans
              const memberId = selectedMemberForCheckout.id;
              const memberActiveLoans = transactions.filter(t => t.memberId === memberId && t.type === 'CheckOut').length;
              const memberReturnedLoans = transactions.filter(t => t.memberId === memberId && t.type === 'CheckIn').length;
              
-             // If Mercy needed, close Confirm and Open Mercy (No DB call yet)
+             // If Mercy needed, close Confirm and Open Mercy
              if (memberActiveLoans > memberReturnedLoans) {
                  setConfirmModalOpen(false);
                  setIsMercyModalOpen(true);
@@ -182,7 +196,6 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
 
              // Normal Checkout
              setIsSubmitting(true);
-             // ⏳ Wait for DB
              const result = await onCheckout(bookToCheckout.id, selectedMemberForCheckout.id, new Date(dueDate).toISOString());
              
              setIsSubmitting(false);
@@ -199,13 +212,11 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
         }
     };
 
-    // ✅ FIXED: Async Mercy Checkout
     const handleMercyCheckout = async () => {
         if (bookToCheckout && selectedMemberForCheckout && dueDate) {
             if (isSubmitting) return;
             setIsSubmitting(true);
 
-            // ⏳ Wait for DB
             const result = await onCheckout(bookToCheckout.id, selectedMemberForCheckout.id, new Date(dueDate).toISOString(), true); // Force = true
             
             setIsSubmitting(false);
@@ -302,9 +313,9 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
             
             <MemberSearchModal isOpen={isMemberSearchOpen} onClose={() => setIsMemberSearchOpen(false)} onSelect={handleSelectMember} members={members} />
             
+            {/* Standard Checkout Confirmation */}
             <Modal
                 isOpen={confirmModalOpen}
-                // ✅ Loading Protection
                 onClose={() => !isSubmitting && setConfirmModalOpen(false)}
                 onConfirm={handleCheckoutRequest}
                 title="Confirm Checkout"
@@ -359,9 +370,30 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
                 </div>
             </Modal>
 
+            {/* ✅ NEW: Reservation Conflict Modal (Problem 1 Fix) */}
+            <Modal
+                isOpen={isResConflictModalOpen}
+                onClose={() => setIsResConflictModalOpen(false)}
+                onConfirm={handleOverrideReservationConflict}
+                title="Reservation Conflict"
+                confirmText="Continue Anyway"
+                confirmButtonClass="bg-red-600 hover:bg-red-700"
+            >
+                <div className="flex flex-col space-y-3">
+                    <div className="flex items-start p-3 bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 rounded-md border border-red-200 dark:border-red-800">
+                        <ExclamationTriangleIcon className="h-6 w-6 mr-3 flex-shrink-0 mt-0.5" />
+                        <div>
+                            <h3 className="font-semibold text-lg mb-1">Book Reserved</h3>
+                            <p className="text-sm mb-2">{resConflictDetails}</p>
+                            <p className="text-sm font-bold">Do you want to ignore this reservation and check out the book anyway?</p>
+                        </div>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* Mercy Rule Modal */}
             <Modal
                 isOpen={isMercyModalOpen}
-                // ✅ Loading Protection
                 onClose={() => !isSubmitting && setIsMercyModalOpen(false)}
                 onConfirm={handleMercyCheckout}
                 title="Mercy Rule Override"
@@ -376,9 +408,6 @@ const CheckoutBook: React.FC<CheckoutBookProps> = ({ books, members, categories,
                             <h3 className="font-semibold text-lg mb-1">Checkout Restricted</h3>
                             <p className="text-sm mb-2">
                                 Member <strong>{selectedMemberForCheckout?.name}</strong> already has books checked out that have not been returned.
-                            </p>
-                            <p className="text-sm mb-2">
-                                You are attempting to check out: <strong>{bookToCheckout?.title}</strong>
                             </p>
                             <p className="text-sm font-medium">
                                 Do you wish to apply the "Mercy Rule" and allow this checkout anyway?
