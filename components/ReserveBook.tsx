@@ -18,7 +18,6 @@ interface ReserveBookProps {
     categories: string[];
     booksWithAvailability: BookWithAvailability[];
     transactions: Transaction[];
-    // Updated types to return Promise
     onReserveBook: (reservation: { bookId: string; memberId: string; pickupDate: string; }) => Promise<{ success: boolean; message: string }>;
     onCancelReservation: (reservationId: string) => Promise<{ success: boolean; message: string }>;
     onIssueBook: (reservationId: string) => Promise<{ success: boolean; message: string }>;
@@ -88,7 +87,6 @@ const getStatusChip = (status: BookStatus) => {
             return null;
     }
 };
-
 
 const ReserveBook: React.FC<ReserveBookProps> = ({ 
     settings,
@@ -513,7 +511,6 @@ const ReserveBook: React.FC<ReserveBookProps> = ({
                         </div>
 
                         {filteredReservations.length > 0 ? (
-                             {/* ✅ PROBLEM 2 FIX: Matched height to max-h-[60vh] to align with left side */}
                              <ul className="space-y-3 max-h-[60vh] overflow-y-auto">
                                 {filteredReservations.map(res => {
                                     return (
